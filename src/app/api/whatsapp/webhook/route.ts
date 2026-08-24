@@ -22,8 +22,36 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
-  console.log("Webhook WhatsApp recebido:");
-  console.log(JSON.stringify(body, null, 2));
+  try {
+    const change = body?.entry?.[0]?.changes?.[0];
+    const value = change?.value;
+    const message = value?.messages?.[0];
+    const contact = value?.contacts?.[0];
 
-  return NextResponse.json({ status: "ok" });
+    if (message) {
+      const from = message.from;
+      const type = message.type;
+      const text = message.text?.body ?? null;
+      const name = contact?.profile?.name ?? "Sem nome";
+
+      console.log("=== WHATSAPP MESSAGE ===");
+      console.log("Nome:", name);
+      console.log("De:", from);
+      console.log("Tipo:", type);
+      console.log("Texto:", text);
+      console.log("========================");
+    } else {
+      console.log("Evento do WhatsApp sem mensagem:");
+      console.log(JSON.stringify(body, null, 2));
+    }
+
+    return NextResponse.json({ status: "ok" });
+  } catch (error) {
+    console.error("Erro ao processar webhook:", error);
+
+    return NextResponse.json(
+      { status: "error" },
+      { status: 500 }
+    );
+  }
 }
