@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import OpenAI from "openai";
 
 const GRAPH_API_VERSION = "v26.0";
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -45,6 +50,7 @@ export async function POST(request: NextRequest) {
 
     const from = message.from;
     const type = message.type;
+
     const text =
       type === "text"
         ? message?.text?.body
@@ -70,9 +76,16 @@ export async function POST(request: NextRequest) {
     const phoneNumberId =
       process.env.WHATSAPP_PHONE_NUMBER_ID;
 
-    if (!accessToken || !phoneNumberId) {
+    const openaiApiKey =
+      process.env.OPENAI_API_KEY;
+
+    if (
+      !accessToken ||
+      !phoneNumberId ||
+      !openaiApiKey
+    ) {
       console.error(
-        "WHATSAPP_ACCESS_TOKEN ou WHATSAPP_PHONE_NUMBER_ID não configurado."
+        "Variáveis de ambiente obrigatórias não configuradas."
       );
 
       return NextResponse.json(
@@ -81,27 +94,63 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log("Enviando mensagem para a OpenAI...");
+
+    const aiResponse =
+      await openai.responses.create({
+        model: "gpt-5.6",
+
+        instructions: `
+Você é o assistente virtual da Wal Brasil.
+
+Converse de forma natural, clara e profissional em português brasileiro.
+
+Seu objetivo neste momento é apenas conversar normalmente com a pessoa que entrou em contato.
+
+Não invente informações específicas sobre preços, serviços, prazos ou condições da Wal Brasil caso elas não tenham sido fornecidas.
+
+Se não souber uma informação específica sobre a empresa, diga isso naturalmente.
+
+Responda de forma adequada para WhatsApp, sem textos excessivamente longos.
+        `.trim(),
+
+        input: `Nome do contato: ${name}
+
+Mensagem recebida:
+${text}`,
+      });
+
+    const aiText =
+      aiResponse.output_text?.trim() ||
+      "Olá! Recebi sua mensagem, mas não consegui gerar uma resposta agora.";
+
+    console.log("Resposta da OpenAI:", aiText);
+
     const response = await fetch(
       `https://graph.facebook.com/${GRAPH_API_VERSION}/${phoneNumberId}/messages`,
       {
         method: "POST",
+
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
+
         body: JSON.stringify({
           messaging_product: "whatsapp",
           recipient_type: "individual",
           to: from,
           type: "text",
+
           text: {
-            body: "Olá! Sou o assistente virtual da Wal Brasil. Integração funcionando! 🚀",
+            body: aiText,
           },
         }),
       }
     );
 
-    const responseData = await response.json();
+    const responseData =
+      await response.json();
 
     console.log(
       "Resposta da API do WhatsApp:",
@@ -126,6 +175,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       status: "ok",
       replySent: true,
+      aiReply: aiText,
     });
   } catch (error) {
     console.error(
