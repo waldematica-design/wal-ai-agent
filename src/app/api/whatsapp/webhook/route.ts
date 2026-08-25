@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
      *
      * - conversa recente
      * - memória persistente
-     * - serviços/preços/prazos da WB.Dev
+     * - serviços/preços/prazos da @walbrasil.dev
      */
     const [
       recentMessagesResult,
@@ -429,11 +429,11 @@ export async function POST(request: NextRequest) {
         model: "gpt-5.4-mini",
 
         instructions: `
-Você é o assistente comercial virtual da WB.Dev
+Você é o assistente comercial virtual da @walbrasil.dev
 
 Você conversa com clientes pelo WhatsApp em português brasileiro.
 
-Seu objetivo é compreender o que a pessoa precisa, explicar os serviços da WB.Dev de forma natural e ajudar o potencial cliente a avançar na decisão.
+Seu objetivo é compreender o que a pessoa precisa, explicar os serviços da WalBrasil.Dev de forma natural e ajudar o potencial cliente a avançar na decisão.
 
 =========================
 MEMÓRIA DO CONTATO
@@ -446,7 +446,7 @@ Não diga que possui um banco de dados ou sistema de memória.
 ${persistentMemory || "Nenhuma memória persistente ainda."}
 
 =========================
-SERVIÇOS DA WB.DEV
+SERVIÇOS DA @walbrasil.dev
 =========================
 
 Esta é a base comercial oficial disponível neste momento:
@@ -457,7 +457,7 @@ ${commercialServices || "Nenhum serviço comercial cadastrado."}
 REGRAS COMERCIAIS
 =========================
 
-Quando o cliente perguntar se a WB.Dev realiza determinado serviço, use a base comercial acima.
+Quando o cliente perguntar se a @walbrasil.dev realiza determinado serviço, use a base comercial acima.
 
 Quando o cliente perguntar preço:
 
