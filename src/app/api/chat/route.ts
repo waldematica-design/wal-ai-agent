@@ -28,6 +28,9 @@ type AgentResult = {
 type RetrievalDecision = {
   needs_pricing: boolean;
   service_slug: string | null;
+
+  needs_business_contact: boolean;
+
   reasoning_summary: string;
 };
 
@@ -63,9 +66,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = (await request.json()) as ChatRequestBody;
+    const body =
+      (await request.json()) as ChatRequestBody;
 
-    const message = body.message?.trim();
+    const message =
+      body.message?.trim();
 
     if (!message) {
       return NextResponse.json(
@@ -86,7 +91,8 @@ export async function POST(request: NextRequest) {
      */
 
     const visitorToken =
-      body.visitorToken?.trim() || crypto.randomUUID();
+      body.visitorToken?.trim() ||
+      crypto.randomUUID();
 
     let {
       data: visitor,
@@ -94,7 +100,10 @@ export async function POST(request: NextRequest) {
     } = await supabase
       .from("web_visitors")
       .select("*")
-      .eq("visitor_token", visitorToken)
+      .eq(
+        "visitor_token",
+        visitorToken
+      )
       .maybeSingle();
 
     if (visitorLookupError) {
@@ -102,10 +111,14 @@ export async function POST(request: NextRequest) {
     }
 
     if (!visitor) {
-      const { data, error } = await supabase
+      const {
+        data,
+        error,
+      } = await supabase
         .from("web_visitors")
         .insert({
-          visitor_token: visitorToken,
+          visitor_token:
+            visitorToken,
         })
         .select()
         .single();
@@ -129,24 +142,41 @@ export async function POST(request: NextRequest) {
     } = await supabase
       .from("web_conversations")
       .select("*")
-      .eq("visitor_id", visitor.id)
-      .eq("status", "active")
-      .order("last_message_at", {
-        ascending: false,
-      })
+      .eq(
+        "visitor_id",
+        visitor.id
+      )
+      .eq(
+        "status",
+        "active"
+      )
+      .order(
+        "last_message_at",
+        {
+          ascending: false,
+        }
+      )
       .limit(1)
       .maybeSingle();
 
-    if (conversationLookupError) {
+    if (
+      conversationLookupError
+    ) {
       throw conversationLookupError;
     }
 
     if (!conversation) {
-      const { data, error } = await supabase
+      const {
+        data,
+        error,
+      } = await supabase
         .from("web_conversations")
         .insert({
-          visitor_id: visitor.id,
-          status: "active",
+          visitor_id:
+            visitor.id,
+
+          status:
+            "active",
         })
         .select()
         .single();
@@ -160,16 +190,23 @@ export async function POST(request: NextRequest) {
 
     /*
      * =========================================================
-     * 4. SALVA A MENSAGEM ATUAL
+     * 4. SALVA MENSAGEM DO CLIENTE
      * =========================================================
      */
 
-    const { error: userMessageError } = await supabase
+    const {
+      error: userMessageError,
+    } = await supabase
       .from("web_messages")
       .insert({
-        conversation_id: conversation.id,
-        role: "user",
-        content: message,
+        conversation_id:
+          conversation.id,
+
+        role:
+          "user",
+
+        content:
+          message,
       });
 
     if (userMessageError) {
@@ -178,14 +215,14 @@ export async function POST(request: NextRequest) {
 
     /*
      * =========================================================
-     * 5. CARREGA SOMENTE CONTEXTO ESSENCIAL
+     * 5. CARREGA CONTEXTO ESSENCIAL
      *
-     * Histórico recente
-     * Memória persistente
-     * Índice mínimo dos serviços
+     * - histórico recente
+     * - memória persistente
+     * - índice mínimo de serviços
      *
-     * IMPORTANTE:
-     * preços, prazos e descrições NÃO são carregados aqui.
+     * Não carregamos preços,
+     * prazos ou contato aqui.
      * =========================================================
      */
 
@@ -196,42 +233,74 @@ export async function POST(request: NextRequest) {
     ] = await Promise.all([
       supabase
         .from("web_messages")
-        .select("role, content, created_at")
-        .eq("conversation_id", conversation.id)
-        .order("created_at", {
-          ascending: false,
-        })
-        .limit(HISTORY_LIMIT),
+        .select(
+          "role, content, created_at"
+        )
+        .eq(
+          "conversation_id",
+          conversation.id
+        )
+        .order(
+          "created_at",
+          {
+            ascending: false,
+          }
+        )
+        .limit(
+          HISTORY_LIMIT
+        ),
 
       supabase
         .from("web_memory")
         .select(
           "fact_key, fact_value, confidence, updated_at"
         )
-        .eq("visitor_id", visitor.id)
-        .order("updated_at", {
-          ascending: false,
-        })
-        .limit(MEMORY_LIMIT),
+        .eq(
+          "visitor_id",
+          visitor.id
+        )
+        .order(
+          "updated_at",
+          {
+            ascending: false,
+          }
+        )
+        .limit(
+          MEMORY_LIMIT
+        ),
 
       supabase
         .from("services")
-        .select("slug, name")
-        .eq("active", true)
-        .order("name", {
-          ascending: true,
-        }),
+        .select(
+          "slug, name"
+        )
+        .eq(
+          "active",
+          true
+        )
+        .order(
+          "name",
+          {
+            ascending: true,
+          }
+        ),
     ]);
 
-    if (recentMessagesResult.error) {
+    if (
+      recentMessagesResult.error
+    ) {
       throw recentMessagesResult.error;
     }
 
-    if (memoriesResult.error) {
+    if (
+      memoriesResult.error
+    ) {
       throw memoriesResult.error;
     }
 
-    if (serviceIndexResult.error) {
+    if (
+      serviceIndexResult.error
+    ) {
       throw serviceIndexResult.error;
     }
 
@@ -242,114 +311,148 @@ export async function POST(request: NextRequest) {
      */
 
     const recentMessages =
-      recentMessagesResult.data || [];
+      recentMessagesResult.data ||
+      [];
 
-    const conversationHistory = recentMessages
-      .slice()
-      .reverse()
-      .map((item) => ({
-        role:
-          item.role === "assistant"
-            ? ("assistant" as const)
-            : ("user" as const),
+    const conversationHistory =
+      recentMessages
+        .slice()
+        .reverse()
+        .map((item) => ({
+          role:
+            item.role ===
+            "assistant"
+              ? ("assistant" as const)
+              : ("user" as const),
 
-        content: item.content,
-      }));
+          content:
+            item.content,
+        }));
 
     /*
-     * Versão textual para a etapa de interpretação.
+     * Histórico textual para
+     * interpretação interna.
      */
-    const conversationContext = conversationHistory
-      .map((item) => {
-        const speaker =
-          item.role === "assistant" ? "AGENTE" : "CLIENTE";
+    const conversationContext =
+      conversationHistory
+        .map((item) => {
+          const speaker =
+            item.role ===
+            "assistant"
+              ? "AGENTE"
+              : "CLIENTE";
 
-        return `${speaker}: ${item.content}`;
-      })
-      .join("\n");
+          return `${speaker}: ${item.content}`;
+        })
+        .join("\n");
 
     /*
      * =========================================================
-     * 7. MEMÓRIA PERSISTENTE COMPACTA
+     * 7. MEMÓRIA PERSISTENTE
      * =========================================================
      */
 
-    const persistentMemory = (
-      memoriesResult.data || []
-    )
-      .map(
-        (memory) =>
-          `${memory.fact_key}: ${memory.fact_value}`
+    const persistentMemory =
+      (
+        memoriesResult.data ||
+        []
       )
-      .join("\n");
+        .map(
+          (memory) =>
+            `${memory.fact_key}: ${memory.fact_value}`
+        )
+        .join("\n");
 
     /*
      * =========================================================
      * 8. ÍNDICE MÍNIMO DE SERVIÇOS
      *
-     * A etapa de interpretação conhece apenas:
-     * slug + nome.
-     *
-     * Ela NÃO recebe preço.
+     * Apenas slug + nome.
      * =========================================================
      */
 
-    const serviceIndex = (
-      serviceIndexResult.data || []
-    )
-      .map(
-        (service) =>
-          `${service.slug} | ${service.name}`
+    const serviceIndex =
+      (
+        serviceIndexResult.data ||
+        []
       )
-      .join("\n");
+        .map(
+          (service) =>
+            `${service.slug} | ${service.name}`
+        )
+        .join("\n");
 
     /*
      * =========================================================
-     * 9. DECISÃO INTELIGENTE DE RECUPERAÇÃO
+     * 9. ANALISADOR INTERNO
      *
-     * Essa chamada NÃO escreve a resposta ao cliente.
+     * Ele NÃO responde ao cliente.
      *
-     * Ela apenas interpreta a conversa:
+     * Apenas decide se a resposta atual
+     * depende de:
      *
-     * - a resposta atual realmente depende de preço?
-     * - se sim, qual serviço está sendo discutido?
+     * - preço oficial;
+     * - contato oficial do Wal Brasil.
      *
-     * Não usamos lista de palavras-chave em TypeScript.
-     * O modelo interpreta semanticamente a conversa.
+     * Isso é interpretação semântica,
+     * não árvore de palavras-chave.
      * =========================================================
      */
 
     const retrievalResponse =
       await openai.responses.create({
-        model: "gpt-5.4-mini",
+        model:
+          "gpt-5.4-mini",
 
         instructions: `
 Você atua apenas como analisador interno de contexto para um agente comercial.
 
 Sua função NÃO é responder ao cliente.
 
-Leia a conversa recente como um todo e determine se, para responder adequadamente à mensagem atual, é necessário consultar o preço oficial de um serviço.
+Leia a conversa recente como um todo e determine quais dados oficiais do negócio são realmente necessários para que o agente responda adequadamente à mensagem atual.
+
+Você deve analisar duas necessidades possíveis:
+
+1. PREÇO OFICIAL
+
+Determine se a resposta atual depende de consultar o preço oficial de um serviço.
 
 Entenda referências contextuais como:
 "esse projeto",
 "nesse caso",
 "e quanto ficaria?",
-"e isso?",
 "quanto sairia?",
-ou outras formas naturais de continuar a conversa.
+"quanto custa?",
+ou outras formas naturais de continuar uma conversa.
 
 Não dependa de palavras específicas. Interprete intenção e contexto.
 
-Se a mensagem atual não depender de preço oficial, needs_pricing deve ser false.
+Se a mensagem não depender de preço oficial:
+needs_pricing = false.
 
 Se depender de preço:
-- use a conversa recente para identificar o projeto em discussão;
+- use a conversa recente para identificar qual projeto está sendo discutido;
 - escolha o serviço mais compatível entre os serviços disponíveis;
 - retorne exatamente o slug cadastrado.
 
-Se o cliente estiver pedindo preço, mas o contexto ainda não permitir identificar com segurança o serviço, needs_pricing deve ser true e service_slug deve ser null.
+Se houver intenção clara de obter preço, mas ainda não for possível identificar com segurança o serviço:
+needs_pricing = true
+service_slug = null.
 
-Não invente serviços.
+2. CONTATO OFICIAL DO WAL BRASIL
+
+Determine se a resposta atual realmente precisa do dado oficial de contato do Wal Brasil.
+
+needs_business_contact deve ser true quando o cliente estiver pedindo concretamente o contato, número, WhatsApp ou meio direto para falar com o Wal Brasil.
+
+Também pode ser true quando, pelo estágio atual da conversa, o cliente está claramente solicitando falar diretamente com a pessoa responsável e a resposta adequada exige fornecer esse contato.
+
+Não marque como true apenas porque o agente poderia, em tese, oferecer atendimento humano.
+
+Se o cliente ainda está apenas conversando sobre o projeto e o agente consegue continuar ajudando normalmente:
+needs_business_contact = false.
+
+Não invente serviços nem dados de contato.
 
 SERVIÇOS DISPONÍVEIS:
 
@@ -366,71 +469,89 @@ MENSAGEM ATUAL:
 ${message}
         `.trim(),
 
-        max_output_tokens: 150,
+        max_output_tokens:
+          180,
 
         text: {
           format: {
-            type: "json_schema",
+            type:
+              "json_schema",
 
-            name: "pricing_retrieval_decision",
+            name:
+              "business_retrieval_decision",
 
-            strict: true,
+            strict:
+              true,
 
             schema: {
-              type: "object",
+              type:
+                "object",
 
               properties: {
                 needs_pricing: {
-                  type: "boolean",
+                  type:
+                    "boolean",
                 },
 
                 service_slug: {
                   anyOf: [
                     {
-                      type: "string",
+                      type:
+                        "string",
                     },
                     {
-                      type: "null",
+                      type:
+                        "null",
                     },
                   ],
                 },
 
+                needs_business_contact: {
+                  type:
+                    "boolean",
+                },
+
                 reasoning_summary: {
-                  type: "string",
+                  type:
+                    "string",
                 },
               },
 
               required: [
                 "needs_pricing",
                 "service_slug",
+                "needs_business_contact",
                 "reasoning_summary",
               ],
 
-              additionalProperties: false,
+              additionalProperties:
+                false,
             },
           },
         },
       });
 
-    if (!retrievalResponse.output_text) {
+    if (
+      !retrievalResponse.output_text
+    ) {
       throw new Error(
         "A etapa de recuperação não retornou conteúdo."
       );
     }
 
-    const retrievalDecision = JSON.parse(
-      retrievalResponse.output_text
-    ) as RetrievalDecision;
+    const retrievalDecision =
+      JSON.parse(
+        retrievalResponse.output_text
+      ) as RetrievalDecision;
 
     /*
      * =========================================================
-     * 10. RECUPERAÇÃO SELETIVA
-     *
-     * Só consultamos preço se a conversa realmente precisar.
+     * 10. RECUPERAÇÃO SELETIVA DE PREÇO
      * =========================================================
      */
 
-    let officialCommercialContext = "";
+    let officialPricingContext =
+      "";
 
     if (
       retrievalDecision.needs_pricing &&
@@ -455,7 +576,10 @@ ${message}
           "slug",
           retrievalDecision.service_slug
         )
-        .eq("active", true)
+        .eq(
+          "active",
+          true
+        )
         .maybeSingle();
 
       if (serviceError) {
@@ -464,22 +588,29 @@ ${message}
 
       if (service) {
         const price =
-          service.price_min !== null &&
-          service.price_max !== null
+          service.price_min !==
+            null &&
+          service.price_max !==
+            null
             ? `R$ ${Number(
                 service.price_min
               ).toLocaleString(
                 "pt-BR"
               )} a R$ ${Number(
                 service.price_max
-              ).toLocaleString("pt-BR")}`
+              ).toLocaleString(
+                "pt-BR"
+              )}`
             : "Não há faixa oficial cadastrada.";
 
-        officialCommercialContext = `
-DADOS OFICIAIS RECUPERADOS DO NEGÓCIO
+        officialPricingContext = `
+DADOS OFICIAIS DE PREÇO
 
-Serviço identificado: ${service.name}
-Faixa inicial de referência: ${price}
+Serviço identificado:
+${service.name}
+
+Faixa inicial de referência:
+${price}
 
 Descrição:
 ${service.description || "Não cadastrada."}
@@ -493,40 +624,167 @@ Esses dados são a fonte oficial para esta resposta.
     }
 
     /*
-     * Se existe intenção de preço, mas ainda não conseguimos
-     * identificar o serviço, informamos isso ao modelo.
-     *
-     * Ele decide naturalmente se precisa perguntar algo.
+     * Se há intenção de preço,
+     * mas não conseguimos resolver
+     * o serviço com segurança.
      */
     if (
       retrievalDecision.needs_pricing &&
-      !officialCommercialContext
+      !officialPricingContext
     ) {
-      officialCommercialContext = `
-A conversa indica que o cliente deseja informação de preço, mas ainda não há informação suficiente para identificar com segurança qual serviço oficial deve ser usado como referência.
+      officialPricingContext = `
+O cliente deseja informação de preço, mas ainda não há dados suficientes para identificar com segurança qual serviço oficial deve ser usado como referência.
 
-Não invente um valor.
+Não invente valor.
 
-Use o contexto da conversa e, somente se realmente necessário, peça uma informação curta que permita entender melhor o projeto.
+Use o contexto da conversa e, apenas se realmente necessário, peça uma informação curta que permita compreender melhor o projeto.
       `.trim();
     }
 
     /*
      * =========================================================
-     * 11. CHAMADA PRINCIPAL
+     * 11. RECUPERAÇÃO SELETIVA DO CONTATO
      *
-     * Este é o agente que conversa de verdade.
+     * O WhatsApp só é buscado quando
+     * a conversa realmente precisa dele.
+     * =========================================================
+     */
+
+    let officialContactContext =
+      "";
+
+    if (
+      retrievalDecision.needs_business_contact
+    ) {
+      const {
+        data: businessContact,
+        error: businessContactError,
+      } = await supabase
+        .from(
+          "business_info"
+        )
+        .select(
+          "info_key, info_value, description"
+        )
+        .eq(
+          "info_key",
+          "whatsapp_wal_brasil"
+        )
+        .eq(
+          "active",
+          true
+        )
+        .maybeSingle();
+
+      if (
+        businessContactError
+      ) {
+        throw businessContactError;
+      }
+
+      if (businessContact) {
+        const rawPhone =
+          businessContact.info_value;
+
+        let formattedPhone =
+          rawPhone;
+
+        /*
+         * Formata números brasileiros
+         * no padrão:
+         * (17) 99680-2980
+         *
+         * Mantemos também o número
+         * internacional para links.
+         */
+        if (
+          /^55\d{11}$/.test(
+            rawPhone
+          )
+        ) {
+          const ddd =
+            rawPhone.slice(
+              2,
+              4
+            );
+
+          const firstPart =
+            rawPhone.slice(
+              4,
+              9
+            );
+
+          const secondPart =
+            rawPhone.slice(
+              9
+            );
+
+          formattedPhone =
+            `(${ddd}) ${firstPart}-${secondPart}`;
+        }
+
+        officialContactContext = `
+CONTATO OFICIAL DO WAL BRASIL
+
+WhatsApp:
+${formattedPhone}
+
+Número internacional:
+${rawPhone}
+
+Link direto:
+https://wa.me/${rawPhone}
+
+Descrição:
+${businessContact.description || "Contato oficial do Wal Brasil."}
+
+Esses dados são a fonte oficial para esta resposta.
+        `.trim();
+      } else {
+        officialContactContext = `
+O cliente deseja falar diretamente com o Wal Brasil, mas não existe contato oficial ativo disponível na base neste momento.
+
+Não invente número de telefone nem use placeholders.
+        `.trim();
+      }
+    }
+
+    /*
+     * =========================================================
+     * 12. CONTEXTO OFICIAL COMPACTO
+     * =========================================================
+     */
+
+    const officialContexts =
+      [
+        officialPricingContext,
+        officialContactContext,
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+
+    /*
+     * =========================================================
+     * 13. AGENTE PRINCIPAL
      *
-     * Prompt permanente propositalmente curto.
+     * Esta é a única etapa que conversa
+     * com o cliente.
      * =========================================================
      */
 
     const aiResponse =
       await openai.responses.create({
-        model: "gpt-5.4-mini",
+        model:
+          "gpt-5.4-mini",
 
         instructions: `
-Você é o agente de IA do @walbrasil.dev.
+Você representa comercialmente o @walbrasil.dev.
+
+Quando o cliente estiver discutindo um projeto, serviço ou orçamento, não o oriente como se ele precisasse procurar outro desenvolvedor ou outra empresa. O atendimento é do próprio @walbrasil.dev.
+
+Você pode estruturar ideias, requisitos, escopo e informações para ajudar o cliente a avançar no próprio atendimento.
+
+Quando o cliente pedir para falar com uma pessoa, vendedor, técnico, responsável ou alguém que possa fechar o projeto, entenda isso naturalmente como um pedido para falar diretamente com o Wal Brasil.
 
 Converse em português brasileiro de forma natural, inteligente, profissional e humana.
 
@@ -552,7 +810,7 @@ Não repita informações que o cliente já forneceu.
 
 Quando receber dados oficiais do negócio, trate-os como fonte de verdade.
 
-Não invente preços, políticas, prazos ou outras informações comerciais que não tenham sido fornecidas oficialmente.
+Não invente preços, políticas, prazos, contatos ou outras informações comerciais que não tenham sido fornecidas oficialmente.
 
 Adapte a resposta ao estágio e ao tom da conversa.
 
@@ -562,17 +820,19 @@ Conduza a conversa de forma natural e deixe espaço para o cliente responder.
 
 Não sinta necessidade de terminar todas as mensagens com uma pergunta, convite ou oferta de ajuda adicional.
 
-Evite repetir fórmulas como "Se quiser, eu posso..." apenas para manter a conversa andando. Sugira próximos passos somente quando isso realmente fizer sentido no contexto.
+Evite repetir fórmulas como "Se quiser, eu posso..." apenas para manter a conversa andando.
+
+Sugira próximos passos somente quando isso realmente fizer sentido no contexto.
 
 MEMÓRIA ÚTIL DO VISITANTE:
 
 ${persistentMemory || "Nenhuma memória persistente relevante."}
 
 ${
-  officialCommercialContext
+  officialContexts
     ? `CONTEXTO OFICIAL PARA ESTA RESPOSTA:
 
-${officialCommercialContext}`
+${officialContexts}`
     : ""
 }
 
@@ -581,6 +841,7 @@ Além da resposta, identifique somente fatos novos, úteis e explicitamente info
 Não transforme cada frase em memória.
 
 Exemplos úteis:
+
 nome
 empresa
 cidade
@@ -602,50 +863,67 @@ Se o cliente corrigir informação anterior, reutilize a mesma fact_key.
 
 Não armazene senhas, tokens, credenciais, dados bancários, documentos ou informações pessoais sensíveis.
 
-Se não houver fato novo útil, memory_updates deve ser [].
+Se não houver fato novo útil:
+memory_updates deve ser [].
 
 Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
         `.trim(),
 
-        input: conversationHistory,
+        input:
+          conversationHistory,
 
-        max_output_tokens: 500,
+        max_output_tokens:
+          500,
 
         text: {
           format: {
-            type: "json_schema",
+            type:
+              "json_schema",
 
-            name: "walbrasil_web_agent_response",
+            name:
+              "walbrasil_web_agent_response",
 
-            strict: true,
+            strict:
+              true,
 
             schema: {
-              type: "object",
+              type:
+                "object",
 
               properties: {
                 reply: {
-                  type: "string",
+                  type:
+                    "string",
                 },
 
                 memory_updates: {
-                  type: "array",
+                  type:
+                    "array",
 
                   items: {
-                    type: "object",
+                    type:
+                      "object",
 
                     properties: {
                       fact_key: {
-                        type: "string",
+                        type:
+                          "string",
                       },
 
                       fact_value: {
-                        type: "string",
+                        type:
+                          "string",
                       },
 
                       confidence: {
-                        type: "number",
-                        minimum: 0,
-                        maximum: 1,
+                        type:
+                          "number",
+
+                        minimum:
+                          0,
+
+                        maximum:
+                          1,
                       },
                     },
 
@@ -655,7 +933,8 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
                       "confidence",
                     ],
 
-                    additionalProperties: false,
+                    additionalProperties:
+                      false,
                   },
                 },
               },
@@ -665,7 +944,8 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
                 "memory_updates",
               ],
 
-              additionalProperties: false,
+              additionalProperties:
+                false,
             },
           },
         },
@@ -673,7 +953,7 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     /*
      * =========================================================
-     * 12. PROCESSA RESPOSTA
+     * 14. PROCESSA RESPOSTA
      * =========================================================
      */
 
@@ -687,7 +967,9 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
     }
 
     const agentResult =
-      JSON.parse(rawOutput) as AgentResult;
+      JSON.parse(
+        rawOutput
+      ) as AgentResult;
 
     const aiText =
       agentResult.reply?.trim();
@@ -700,22 +982,29 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     /*
      * =========================================================
-     * 13. MEMÓRIA PERSISTENTE
+     * 15. MEMÓRIA PERSISTENTE
      * =========================================================
      */
 
-    const memoryUpdates = (
-      agentResult.memory_updates || []
-    )
-      .filter(
-        (memory) =>
-          memory.fact_key &&
-          memory.fact_value &&
-          memory.confidence >= 0.7
+    const memoryUpdates =
+      (
+        agentResult.memory_updates ||
+        []
       )
-      .slice(0, 5);
+        .filter(
+          (memory) =>
+            memory.fact_key &&
+            memory.fact_value &&
+            memory.confidence >=
+              0.7
+        )
+        .slice(
+          0,
+          5
+        );
 
-    const now = new Date().toISOString();
+    const now =
+      new Date().toISOString();
 
     const databaseOperations: PromiseLike<unknown>[] =
       [];
@@ -725,22 +1014,30 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
      */
     databaseOperations.push(
       supabase
-        .from("web_messages")
+        .from(
+          "web_messages"
+        )
         .insert({
           conversation_id:
             conversation.id,
 
-          role: "assistant",
+          role:
+            "assistant",
 
-          content: aiText,
+          content:
+            aiText,
         })
-        .then((result) => {
-          if (result.error) {
-            throw result.error;
+        .then(
+          (result) => {
+            if (
+              result.error
+            ) {
+              throw result.error;
+            }
+
+            return result;
           }
-
-          return result;
-        })
+        )
     );
 
     /*
@@ -748,38 +1045,59 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
      */
     databaseOperations.push(
       supabase
-        .from("web_conversations")
+        .from(
+          "web_conversations"
+        )
         .update({
-          last_message_at: now,
+          last_message_at:
+            now,
         })
-        .eq("id", conversation.id)
-        .then((result) => {
-          if (result.error) {
-            throw result.error;
-          }
+        .eq(
+          "id",
+          conversation.id
+        )
+        .then(
+          (result) => {
+            if (
+              result.error
+            ) {
+              throw result.error;
+            }
 
-          return result;
-        })
+            return result;
+          }
+        )
     );
 
     /*
-     * Atualiza fatos persistentes.
+     * Atualiza memória.
      */
-    if (memoryUpdates.length > 0) {
+    if (
+      memoryUpdates.length >
+      0
+    ) {
       const memoryRows =
         memoryUpdates.map(
           (memory) => ({
-            visitor_id: visitor.id,
+            visitor_id:
+              visitor.id,
 
-            fact_key: memory.fact_key
-              .trim()
-              .toLowerCase()
-              .replace(
-                /[^a-z0-9_à-ÿ]/gi,
-                "_"
-              )
-              .replace(/_+/g, "_")
-              .replace(/^_+|_+$/g, ""),
+            fact_key:
+              memory.fact_key
+                .trim()
+                .toLowerCase()
+                .replace(
+                  /[^a-z0-9_à-ÿ]/gi,
+                  "_"
+                )
+                .replace(
+                  /_+/g,
+                  "_"
+                )
+                .replace(
+                  /^_+|_+$/g,
+                  ""
+                ),
 
             fact_value:
               memory.fact_value.trim(),
@@ -787,24 +1105,34 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
             confidence:
               memory.confidence,
 
-            source: "web_chat",
+            source:
+              "web_chat",
           })
         );
 
       databaseOperations.push(
         supabase
-          .from("web_memory")
-          .upsert(memoryRows, {
-            onConflict:
-              "visitor_id,fact_key",
-          })
-          .then((result) => {
-            if (result.error) {
-              throw result.error;
+          .from(
+            "web_memory"
+          )
+          .upsert(
+            memoryRows,
+            {
+              onConflict:
+                "visitor_id,fact_key",
             }
+          )
+          .then(
+            (result) => {
+              if (
+                result.error
+              ) {
+                throw result.error;
+              }
 
-            return result;
-          })
+              return result;
+            }
+          )
       );
     }
 
@@ -814,10 +1142,7 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     /*
      * =========================================================
-     * 14. LOGS DE DESENVOLVIMENTO
-     *
-     * Isso vai nos permitir conferir se a recuperação
-     * contextual está funcionando como planejado.
+     * 16. LOGS
      * =========================================================
      */
 
@@ -837,7 +1162,8 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     console.log(
       "Memórias carregadas:",
-      memoriesResult.data?.length || 0
+      memoriesResult.data
+        ?.length || 0
     );
 
     console.log(
@@ -851,13 +1177,27 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
     );
 
     console.log(
-      "Resumo da decisão:",
-      retrievalDecision.reasoning_summary
+      "Precisa contato oficial:",
+      retrievalDecision.needs_business_contact
     );
 
     console.log(
       "Preço recuperado:",
-      Boolean(officialCommercialContext)
+      Boolean(
+        officialPricingContext
+      )
+    );
+
+    console.log(
+      "Contato recuperado:",
+      Boolean(
+        officialContactContext
+      )
+    );
+
+    console.log(
+      "Resumo da decisão:",
+      retrievalDecision.reasoning_summary
     );
 
     console.log(
@@ -866,12 +1206,12 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
     );
 
     console.log(
-      "Tokens etapa recuperação:",
+      "Tokens recuperação:",
       retrievalResponse.usage
     );
 
     console.log(
-      "Tokens resposta principal:",
+      "Tokens resposta:",
       aiResponse.usage
     );
 
@@ -881,14 +1221,19 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     /*
      * =========================================================
-     * 15. RESPOSTA PARA O SITE
+     * 17. RESPOSTA PARA O SITE
      * =========================================================
      */
 
     return NextResponse.json({
-      status: "ok",
-      reply: aiText,
+      status:
+        "ok",
+
+      reply:
+        aiText,
+
       visitorToken,
+
       memoriesUpdated:
         memoryUpdates.length,
     });
@@ -900,12 +1245,15 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     return NextResponse.json(
       {
-        status: "error",
+        status:
+          "error",
+
         error:
           "Não foi possível processar a mensagem.",
       },
       {
-        status: 500,
+        status:
+          500,
       }
     );
   }
