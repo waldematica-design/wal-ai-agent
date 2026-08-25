@@ -3,7 +3,12 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const GRAPH_API_VERSION = "v26.0";
-const HISTORY_LIMIT = 10;
+
+// Mantemos o contexto pequeno para reduzir custo e latência.
+const HISTORY_LIMIT = 8;
+
+// Limitamos também a quantidade de memórias enviadas ao modelo.
+const MEMORY_LIMIT = 20;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -14,6 +19,17 @@ const supabase = createClient(
   process.env.SUPABASE_SECRET_KEY!
 );
 
+type MemoryUpdate = {
+  fact_key: string;
+  fact_value: string;
+  confidence: number;
+};
+
+type AgentResult = {
+  reply: string;
+  memory_updates: MemoryUpdate[];
+};
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
@@ -22,31 +38,50 @@ export async function GET(request: NextRequest) {
   const challenge = searchParams.get("hub.challenge");
 
   const verifyToken =
-    process.env.WHATSAPP_VERIFY_TOKEN || "wal-ai-webhook-2026";
+    process.env.WHATSAPP_VERIFY_TOKEN ||
+    "wal-ai-webhook-2026";
 
-  if (mode === "subscribe" && token === verifyToken) {
-    return new NextResponse(challenge, { status: 200 });
+  if (
+    mode === "subscribe" &&
+    token === verifyToken
+  ) {
+    return new NextResponse(challenge, {
+      status: 200,
+    });
   }
 
   return NextResponse.json(
-    { error: "Falha na verificação do webhook." },
-    { status: 403 }
+    {
+      error:
+        "Falha na verificação do webhook.",
+    },
+    {
+      status: 403,
+    }
   );
 }
 
-export async function POST(request: NextRequest) {
+export async function POST(
+  request: NextRequest
+) {
   try {
     const body = await request.json();
 
-    const change = body?.entry?.[0]?.changes?.[0];
-    const value = change?.value;
+    const change =
+      body?.entry?.[0]?.changes?.[0];
 
-    const message = value?.messages?.[0];
-    const contact = value?.contacts?.[0];
+    const value =
+      change?.value;
+
+    const message =
+      value?.messages?.[0];
+
+    const contact =
+      value?.contacts?.[0];
 
     /*
      * Eventos de status, entrega, leitura etc.
-     * NÃO geram resposta.
+     * não devem gerar resposta.
      */
     if (!message) {
       return NextResponse.json({
@@ -54,9 +89,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const from = message.from;
-    const type = message.type;
-    const whatsappMessageId = message.id;
+    const from =
+      message.from;
+
+    const type =
+      message.type;
+
+    const whatsappMessageId =
+      message.id;
 
     const text =
       type === "text"
@@ -64,11 +104,12 @@ export async function POST(request: NextRequest) {
         : null;
 
     const name =
-      contact?.profile?.name || "Sem nome";
+      contact?.profile?.name ||
+      "Sem nome";
 
     /*
-     * Nesta fase respondemos SOMENTE texto recebido
-     * de um usuário.
+     * Neste estágio respondemos somente
+     * mensagens reais de texto.
      */
     if (
       !from ||
@@ -99,15 +140,23 @@ export async function POST(request: NextRequest) {
       );
 
       return NextResponse.json(
-        { status: "configuration_error" },
-        { status: 500 }
+        {
+          status:
+            "configuration_error",
+        },
+        {
+          status: 500,
+        }
       );
     }
 
     /*
      * 1. Localiza ou cria o contato.
      */
-    const { data: contactRecord, error: contactError } =
+    const {
+      data: contactRecord,
+      error: contactError,
+    } =
       await supabase
         .from("contacts")
         .upsert(
@@ -122,23 +171,39 @@ export async function POST(request: NextRequest) {
         .select()
         .single();
 
-    if (contactError || !contactRecord) {
-      throw contactError ||
-        new Error("Contato não encontrado.");
+    if (
+      contactError ||
+      !contactRecord
+    ) {
+      throw (
+        contactError ||
+        new Error(
+          "Contato não encontrado."
+        )
+      );
     }
 
     /*
      * 2. Localiza conversa ativa.
      */
-    let { data: conversation, error: conversationError } =
+    let {
+      data: conversation,
+      error: conversationError,
+    } =
       await supabase
         .from("conversations")
         .select("*")
-        .eq("contact_id", contactRecord.id)
+        .eq(
+          "contact_id",
+          contactRecord.id
+        )
         .eq("status", "active")
-        .order("last_message_at", {
-          ascending: false,
-        })
+        .order(
+          "last_message_at",
+          {
+            ascending: false,
+          }
+        )
         .limit(1)
         .maybeSingle();
 
@@ -147,14 +212,18 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 3. Cria conversa caso ainda não exista.
+     * 3. Cria conversa se necessário.
      */
     if (!conversation) {
-      const { data, error } =
+      const {
+        data,
+        error,
+      } =
         await supabase
           .from("conversations")
           .insert({
-            contact_id: contactRecord.id,
+            contact_id:
+              contactRecord.id,
             status: "active",
           })
           .select()
@@ -168,35 +237,43 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 4. TRAVA PRINCIPAL CONTRA REPETIÇÕES.
+     * 4. Salva a mensagem recebida.
      *
-     * whatsapp_message_id possui índice UNIQUE.
-     * Se a Meta reenviar a mesma mensagem,
-     * o banco rejeita e nós NÃO chamamos a OpenAI
-     * novamente e NÃO respondemos novamente.
+     * O índice UNIQUE em
+     * whatsapp_message_id evita retries.
      */
-    const { error: userMessageError } =
+    const {
+      error: userMessageError,
+    } =
       await supabase
         .from("messages")
         .insert({
-          conversation_id: conversation.id,
+          conversation_id:
+            conversation.id,
+
           role: "user",
+
           content: text,
-          whatsapp_message_id: whatsappMessageId,
+
+          whatsapp_message_id:
+            whatsappMessageId,
         });
 
     if (userMessageError) {
-      /*
-       * PostgreSQL 23505 = violação de UNIQUE.
-       */
-      if (userMessageError.code === "23505") {
+      // PostgreSQL 23505 =
+      // violação de UNIQUE.
+      if (
+        userMessageError.code ===
+        "23505"
+      ) {
         console.log(
           "Webhook repetido ignorado:",
           whatsappMessageId
         );
 
         return NextResponse.json({
-          status: "duplicate_ignored",
+          status:
+            "duplicate_ignored",
         });
       }
 
@@ -204,45 +281,94 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 5. Busca apenas as últimas 10 mensagens.
-     *
-     * Menos contexto =
-     * menos tokens +
-     * menor custo +
-     * menor latência.
+     * 5. Busca memória recente
+     * e memória persistente em paralelo.
      */
-    const { data: recentMessages, error: messagesError } =
-      await supabase
+    const [
+      recentMessagesResult,
+      memoriesResult,
+    ] = await Promise.all([
+      supabase
         .from("messages")
-        .select("role, content, created_at")
-        .eq("conversation_id", conversation.id)
+        .select(
+          "role, content, created_at"
+        )
+        .eq(
+          "conversation_id",
+          conversation.id
+        )
         .order("created_at", {
           ascending: false,
         })
-        .limit(HISTORY_LIMIT);
+        .limit(HISTORY_LIMIT),
 
-    if (messagesError) {
-      throw messagesError;
+      supabase
+        .from("contact_memory")
+        .select(
+          "fact_key, fact_value, confidence, updated_at"
+        )
+        .eq(
+          "contact_id",
+          contactRecord.id
+        )
+        .order("updated_at", {
+          ascending: false,
+        })
+        .limit(MEMORY_LIMIT),
+    ]);
+
+    if (
+      recentMessagesResult.error
+    ) {
+      throw recentMessagesResult.error;
     }
 
+    if (memoriesResult.error) {
+      throw memoriesResult.error;
+    }
+
+    /*
+     * 6. Organiza histórico recente.
+     */
     const conversationHistory =
-      (recentMessages || [])
+      (
+        recentMessagesResult.data ||
+        []
+      )
         .reverse()
         .map((item) => ({
           role:
-            item.role === "assistant"
+            item.role ===
+            "assistant"
               ? ("assistant" as const)
               : ("user" as const),
-          content: item.content,
+
+          content:
+            item.content,
         }));
 
     /*
-     * 6. OpenAI.
+     * 7. Transforma memória persistente
+     * em um bloco curto para economizar tokens.
+     */
+    const persistentMemory =
+      (
+        memoriesResult.data ||
+        []
+      )
+        .map(
+          (memory) =>
+            `${memory.fact_key}: ${memory.fact_value}`
+        )
+        .join("\n");
+
+    /*
+     * 8. Uma única chamada à OpenAI.
      *
-     * Modelo menor para priorizar:
-     * - velocidade
-     * - custo
-     * - conversa comercial cotidiana
+     * Ela:
+     * - responde ao usuário;
+     * - identifica novos fatos úteis;
+     * - devolve tudo estruturado.
      */
     const aiResponse =
       await openai.responses.create({
@@ -251,74 +377,325 @@ export async function POST(request: NextRequest) {
         instructions: `
 Você é o assistente virtual da Wal Brasil.
 
-Converse naturalmente em português brasileiro.
+Você conversa com clientes pelo WhatsApp em português brasileiro.
 
-Você atende pelo WhatsApp.
+OBJETIVO
 
-REGRAS IMPORTANTES:
+Converse naturalmente, compreenda o contexto e ajude o usuário de forma clara e profissional.
 
-- Responda apenas à mensagem atual do usuário.
+MEMÓRIA PERSISTENTE DO CONTATO
+
+Abaixo podem existir fatos que foram aprendidos anteriormente sobre esta pessoa.
+
+Use esses fatos quando forem relevantes.
+
+Não mencione que existe um banco de dados ou sistema de memória.
+
+MEMÓRIA ATUAL:
+
+${persistentMemory || "Nenhuma memória persistente ainda."}
+
+REGRAS DE CONVERSA
+
+- Responda somente à mensagem atual do usuário.
 - Nunca envie follow-up por iniciativa própria.
 - Nunca cobre uma resposta.
-- Nunca insista para o usuário continuar conversando.
-- Nunca repita uma pergunta já respondida.
-- Use o histórico apenas para manter continuidade.
-- Prefira respostas curtas, naturais e úteis.
-- Normalmente responda em 1 ou 2 parágrafos curtos.
-- Só dê respostas longas quando o usuário pedir detalhes.
-- Não invente preços, prazos, produtos, serviços ou condições da Wal Brasil.
-- Se não souber uma informação específica da empresa, diga isso naturalmente.
-- Evite saudações repetidas quando a conversa já estiver em andamento.
+- Nunca insista para continuar a conversa.
+- Não repita perguntas já respondidas.
+- Evite repetir saudações durante uma conversa em andamento.
+- Prefira respostas curtas e naturais para WhatsApp.
+- Normalmente use 1 ou 2 parágrafos curtos.
+- Só escreva respostas longas quando o usuário pedir detalhes.
 - Não transforme toda resposta em pergunta.
-- Se a mensagem puder ser respondida diretamente, responda e encerre naturalmente.
+- Se puder responder diretamente, responda e encerre naturalmente.
+- Não invente preços, prazos, serviços ou condições específicas da Wal Brasil.
+
+MEMÓRIA DE LONGO PRAZO
+
+Além da resposta, identifique fatos novos e úteis que o usuário revelou EXPLICITAMENTE NA MENSAGEM ATUAL.
+
+Salve somente informações que tenham boa chance de ser úteis em conversas futuras.
+
+Exemplos adequados:
+
+nome
+idade
+empresa
+cidade
+tipo_projeto
+servico_interesse
+orcamento
+prazo
+objetivo
+preferencia_visual
+preferencia_contato
+cargo
+segmento_empresa
+
+Use fact_key curto, em português e snake_case.
+
+Exemplo:
+
+fact_key: "idade"
+fact_value: "22"
+
+Outro exemplo:
+
+fact_key: "tipo_projeto"
+fact_value: "site para clínica"
+
+IMPORTANTE:
+
+- Não crie memória para cada frase.
+- Não salve fatos triviais ou momentâneos.
+- Não transforme inferências em fatos.
+- Não salve algo apenas porque apareceu no histórico antigo.
+- memory_updates deve refletir apenas fatos novos ou correções presentes na mensagem ATUAL do usuário.
+- Se o usuário corrigir informação anterior, use a mesma fact_key com o novo valor.
+- Não salve senhas, tokens, documentos, dados bancários ou credenciais.
+- Não salve informações médicas, políticas, religiosas ou outras informações pessoais sensíveis.
+- Se não houver nada útil para memorizar, retorne memory_updates vazio.
+
+CONFIDENCE
+
+Use 1.0 quando o usuário declarou o fato diretamente.
+
+Use um valor menor apenas se houver pequena ambiguidade.
+
+Não salve fatos muito incertos.
         `.trim(),
 
-        input: conversationHistory,
+        input:
+          conversationHistory,
 
-        max_output_tokens: 220,
+        max_output_tokens: 320,
+
+        text: {
+          format: {
+            type: "json_schema",
+
+            name:
+              "wal_ai_agent_response",
+
+            strict: true,
+
+            schema: {
+              type: "object",
+
+              properties: {
+                reply: {
+                  type: "string",
+                },
+
+                memory_updates: {
+                  type: "array",
+
+                  items: {
+                    type: "object",
+
+                    properties: {
+                      fact_key: {
+                        type:
+                          "string",
+                      },
+
+                      fact_value: {
+                        type:
+                          "string",
+                      },
+
+                      confidence: {
+                        type:
+                          "number",
+                        minimum: 0,
+                        maximum: 1,
+                      },
+                    },
+
+                    required: [
+                      "fact_key",
+                      "fact_value",
+                      "confidence",
+                    ],
+
+                    additionalProperties:
+                      false,
+                  },
+                },
+              },
+
+              required: [
+                "reply",
+                "memory_updates",
+              ],
+
+              additionalProperties:
+                false,
+            },
+          },
+        },
       });
 
+    /*
+     * 9. Converte JSON estruturado.
+     */
+    const rawOutput =
+      aiResponse.output_text;
+
+    if (!rawOutput) {
+      throw new Error(
+        "OpenAI não retornou conteúdo."
+      );
+    }
+
+    const agentResult =
+      JSON.parse(
+        rawOutput
+      ) as AgentResult;
+
     const aiText =
-      aiResponse.output_text?.trim() ||
-      "Desculpe, não consegui responder agora.";
+      agentResult.reply?.trim();
+
+    if (!aiText) {
+      throw new Error(
+        "Resposta da IA vazia."
+      );
+    }
 
     /*
-     * 7. Salva resposta e atualiza conversa
-     * simultaneamente.
+     * 10. Sanitiza memórias.
+     *
+     * Mesmo usando JSON Schema,
+     * fazemos uma proteção adicional.
+     */
+    const memoryUpdates =
+      (
+        agentResult.memory_updates ||
+        []
+      )
+        .filter(
+          (memory) =>
+            memory.fact_key &&
+            memory.fact_value &&
+            memory.confidence >=
+              0.7
+        )
+        .slice(0, 5);
+
+    /*
+     * 11. Prepara gravação da resposta.
      */
     const now =
       new Date().toISOString();
 
-    const [
-      assistantInsert,
-      conversationUpdate,
-    ] = await Promise.all([
+    const databaseOperations: PromiseLike<unknown>[] =
+      [];
+
+    databaseOperations.push(
       supabase
         .from("messages")
         .insert({
-          conversation_id: conversation.id,
-          role: "assistant",
-          content: aiText,
-        }),
+          conversation_id:
+            conversation.id,
 
+          role: "assistant",
+
+          content: aiText,
+        })
+        .then((result) => {
+          if (result.error) {
+            throw result.error;
+          }
+
+          return result;
+        })
+    );
+
+    databaseOperations.push(
       supabase
         .from("conversations")
         .update({
-          last_message_at: now,
+          last_message_at:
+            now,
         })
-        .eq("id", conversation.id),
-    ]);
+        .eq(
+          "id",
+          conversation.id
+        )
+        .then((result) => {
+          if (result.error) {
+            throw result.error;
+          }
 
-    if (assistantInsert.error) {
-      throw assistantInsert.error;
-    }
-
-    if (conversationUpdate.error) {
-      throw conversationUpdate.error;
-    }
+          return result;
+        })
+    );
 
     /*
-     * 8. Envia UMA resposta pelo WhatsApp.
+     * 12. Salva somente memórias novas
+     * ou atualiza fatos existentes.
+     */
+    if (
+      memoryUpdates.length > 0
+    ) {
+      const memoryRows =
+        memoryUpdates.map(
+          (memory) => ({
+            contact_id:
+              contactRecord.id,
+
+            fact_key:
+              memory.fact_key
+                .trim()
+                .toLowerCase()
+                .replace(
+                  /[^a-z0-9_à-ÿ]/gi,
+                  "_"
+                )
+                .replace(
+                  /_+/g,
+                  "_"
+                ),
+
+            fact_value:
+              memory.fact_value.trim(),
+
+            confidence:
+              memory.confidence,
+
+            source:
+              "conversation",
+          })
+        );
+
+      databaseOperations.push(
+        supabase
+          .from(
+            "contact_memory"
+          )
+          .upsert(
+            memoryRows,
+            {
+              onConflict:
+                "contact_id,fact_key",
+            }
+          )
+          .then((result) => {
+            if (result.error) {
+              throw result.error;
+            }
+
+            return result;
+          })
+      );
+    }
+
+    await Promise.all(
+      databaseOperations
+    );
+
+    /*
+     * 13. Envia UMA resposta para o WhatsApp.
      */
     const whatsappResponse =
       await fetch(
@@ -327,55 +704,100 @@ REGRAS IMPORTANTES:
           method: "POST",
 
           headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
+            Authorization:
+              `Bearer ${accessToken}`,
+
+            "Content-Type":
+              "application/json",
           },
 
-          body: JSON.stringify({
-            messaging_product: "whatsapp",
-            recipient_type: "individual",
-            to: from,
-            type: "text",
+          body:
+            JSON.stringify({
+              messaging_product:
+                "whatsapp",
 
-            text: {
-              preview_url: false,
-              body: aiText,
-            },
-          }),
+              recipient_type:
+                "individual",
+
+              to: from,
+
+              type: "text",
+
+              text: {
+                preview_url:
+                  false,
+
+                body:
+                  aiText,
+              },
+            }),
         }
       );
 
     const whatsappData =
       await whatsappResponse.json();
 
-    if (!whatsappResponse.ok) {
+    /*
+     * Já processamos a entrada.
+     * Não devolvemos 500 por falha
+     * somente na saída para evitar
+     * retries indesejados da Meta.
+     */
+    if (
+      !whatsappResponse.ok
+    ) {
       console.error(
         "Erro ao enviar WhatsApp:",
         whatsappData
       );
 
-      /*
-       * Importante:
-       *
-       * Retornamos 200 mesmo se a resposta de saída
-       * falhar, porque a mensagem de entrada JÁ foi
-       * processada.
-       *
-       * Isso evita que a Meta fique reenviando o
-       * mesmo webhook e provocando novas respostas.
-       */
       return NextResponse.json({
-        status: "processed_but_send_failed",
+        status:
+          "processed_but_send_failed",
       });
     }
 
     console.log(
-      `Respondido ${from} | contexto: ${conversationHistory.length} mensagens`
+      "=== WAL AI AGENT ==="
+    );
+
+    console.log(
+      "Contato:",
+      from
+    );
+
+    console.log(
+      "Histórico:",
+      conversationHistory.length
+    );
+
+    console.log(
+      "Memórias recuperadas:",
+      memoriesResult.data
+        ?.length || 0
+    );
+
+    console.log(
+      "Memórias atualizadas:",
+      memoryUpdates
+    );
+
+    console.log(
+      "Tokens:",
+      aiResponse.usage
+    );
+
+    console.log(
+      "===================="
     );
 
     return NextResponse.json({
       status: "ok",
+
       replySent: true,
+
+      memoriesUpdated:
+        memoryUpdates.length,
     });
   } catch (error) {
     console.error(
@@ -384,8 +806,12 @@ REGRAS IMPORTANTES:
     );
 
     return NextResponse.json(
-      { status: "error" },
-      { status: 500 }
+      {
+        status: "error",
+      },
+      {
+        status: 500,
+      }
     );
   }
 }
