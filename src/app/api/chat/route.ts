@@ -27,10 +27,8 @@ type AgentResult = {
 
 type RetrievalDecision = {
   needs_pricing: boolean;
-  service_slug: string | null;
-
+  service_slugs: string[];
   needs_business_contact: boolean;
-
   reasoning_summary: string;
 };
 
@@ -41,12 +39,6 @@ type ChatRequestBody = {
 
 export async function POST(request: NextRequest) {
   try {
-    /*
-     * =========================================================
-     * 1. CONFIGURAÇÃO
-     * =========================================================
-     */
-
     if (
       !process.env.OPENAI_API_KEY ||
       !process.env.SUPABASE_URL ||
@@ -66,11 +58,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body =
-      (await request.json()) as ChatRequestBody;
+    const body = (await request.json()) as ChatRequestBody;
 
-    const message =
-      body.message?.trim();
+    const message = body.message?.trim();
 
     if (!message) {
       return NextResponse.json(
@@ -84,26 +74,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    /*
-     * =========================================================
-     * 2. VISITANTE
-     * =========================================================
-     */
-
     const visitorToken =
-      body.visitorToken?.trim() ||
-      crypto.randomUUID();
+      body.visitorToken?.trim() || crypto.randomUUID();
 
+    /*
+     * VISITANTE
+     */
     let {
       data: visitor,
       error: visitorLookupError,
     } = await supabase
       .from("web_visitors")
       .select("*")
-      .eq(
-        "visitor_token",
-        visitorToken
-      )
+      .eq("visitor_token", visitorToken)
       .maybeSingle();
 
     if (visitorLookupError) {
@@ -111,14 +94,10 @@ export async function POST(request: NextRequest) {
     }
 
     if (!visitor) {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("web_visitors")
         .insert({
-          visitor_token:
-            visitorToken,
+          visitor_token: visitorToken,
         })
         .select()
         .single();
@@ -131,52 +110,32 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * =========================================================
-     * 3. CONVERSA ATIVA
-     * =========================================================
+     * CONVERSA
      */
-
     let {
       data: conversation,
       error: conversationLookupError,
     } = await supabase
       .from("web_conversations")
       .select("*")
-      .eq(
-        "visitor_id",
-        visitor.id
-      )
-      .eq(
-        "status",
-        "active"
-      )
-      .order(
-        "last_message_at",
-        {
-          ascending: false,
-        }
-      )
+      .eq("visitor_id", visitor.id)
+      .eq("status", "active")
+      .order("last_message_at", {
+        ascending: false,
+      })
       .limit(1)
       .maybeSingle();
 
-    if (
-      conversationLookupError
-    ) {
+    if (conversationLookupError) {
       throw conversationLookupError;
     }
 
     if (!conversation) {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("web_conversations")
         .insert({
-          visitor_id:
-            visitor.id,
-
-          status:
-            "active",
+          visitor_id: visitor.id,
+          status: "active",
         })
         .select()
         .single();
@@ -189,24 +148,14 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * =========================================================
-     * 4. SALVA MENSAGEM DO CLIENTE
-     * =========================================================
+     * SALVA MENSAGEM
      */
-
-    const {
-      error: userMessageError,
-    } = await supabase
+    const { error: userMessageError } = await supabase
       .from("web_messages")
       .insert({
-        conversation_id:
-          conversation.id,
-
-        role:
-          "user",
-
-        content:
-          message,
+        conversation_id: conversation.id,
+        role: "user",
+        content: message,
       });
 
     if (userMessageError) {
@@ -214,18 +163,8 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * =========================================================
-     * 5. CARREGA CONTEXTO ESSENCIAL
-     *
-     * - histórico recente
-     * - memória persistente
-     * - índice mínimo de serviços
-     *
-     * Não carregamos preços,
-     * prazos ou contato aqui.
-     * =========================================================
+     * CONTEXTO ESSENCIAL
      */
-
     const [
       recentMessagesResult,
       memoriesResult,
@@ -233,226 +172,135 @@ export async function POST(request: NextRequest) {
     ] = await Promise.all([
       supabase
         .from("web_messages")
-        .select(
-          "role, content, created_at"
-        )
-        .eq(
-          "conversation_id",
-          conversation.id
-        )
-        .order(
-          "created_at",
-          {
-            ascending: false,
-          }
-        )
-        .limit(
-          HISTORY_LIMIT
-        ),
+        .select("role, content, created_at")
+        .eq("conversation_id", conversation.id)
+        .order("created_at", {
+          ascending: false,
+        })
+        .limit(HISTORY_LIMIT),
 
       supabase
         .from("web_memory")
         .select(
           "fact_key, fact_value, confidence, updated_at"
         )
-        .eq(
-          "visitor_id",
-          visitor.id
-        )
-        .order(
-          "updated_at",
-          {
-            ascending: false,
-          }
-        )
-        .limit(
-          MEMORY_LIMIT
-        ),
+        .eq("visitor_id", visitor.id)
+        .order("updated_at", {
+          ascending: false,
+        })
+        .limit(MEMORY_LIMIT),
 
       supabase
         .from("services")
-        .select(
-          "slug, name"
-        )
-        .eq(
-          "active",
-          true
-        )
-        .order(
-          "name",
-          {
-            ascending: true,
-          }
-        ),
+        .select("slug, name")
+        .eq("active", true)
+        .order("name", {
+          ascending: true,
+        }),
     ]);
 
-    if (
-      recentMessagesResult.error
-    ) {
+    if (recentMessagesResult.error) {
       throw recentMessagesResult.error;
     }
 
-    if (
-      memoriesResult.error
-    ) {
+    if (memoriesResult.error) {
       throw memoriesResult.error;
     }
 
-    if (
-      serviceIndexResult.error
-    ) {
+    if (serviceIndexResult.error) {
       throw serviceIndexResult.error;
     }
 
-    /*
-     * =========================================================
-     * 6. HISTÓRICO RECENTE
-     * =========================================================
-     */
+    const conversationHistory = (
+      recentMessagesResult.data || []
+    )
+      .slice()
+      .reverse()
+      .map((item) => ({
+        role:
+          item.role === "assistant"
+            ? ("assistant" as const)
+            : ("user" as const),
 
-    const recentMessages =
-      recentMessagesResult.data ||
-      [];
+        content: item.content,
+      }));
 
-    const conversationHistory =
-      recentMessages
-        .slice()
-        .reverse()
-        .map((item) => ({
-          role:
-            item.role ===
-            "assistant"
-              ? ("assistant" as const)
-              : ("user" as const),
+    const conversationContext = conversationHistory
+      .map((item) => {
+        const speaker =
+          item.role === "assistant" ? "AGENTE" : "CLIENTE";
 
-          content:
-            item.content,
-        }));
+        return `${speaker}: ${item.content}`;
+      })
+      .join("\n");
 
-    /*
-     * Histórico textual para
-     * interpretação interna.
-     */
-    const conversationContext =
-      conversationHistory
-        .map((item) => {
-          const speaker =
-            item.role ===
-            "assistant"
-              ? "AGENTE"
-              : "CLIENTE";
-
-          return `${speaker}: ${item.content}`;
-        })
-        .join("\n");
-
-    /*
-     * =========================================================
-     * 7. MEMÓRIA PERSISTENTE
-     * =========================================================
-     */
-
-    const persistentMemory =
-      (
-        memoriesResult.data ||
-        []
+    const persistentMemory = (
+      memoriesResult.data || []
+    )
+      .map(
+        (memory) =>
+          `${memory.fact_key}: ${memory.fact_value}`
       )
-        .map(
-          (memory) =>
-            `${memory.fact_key}: ${memory.fact_value}`
-        )
-        .join("\n");
+      .join("\n");
 
-    /*
-     * =========================================================
-     * 8. ÍNDICE MÍNIMO DE SERVIÇOS
-     *
-     * Apenas slug + nome.
-     * =========================================================
-     */
-
-    const serviceIndex =
-      (
-        serviceIndexResult.data ||
-        []
+    const serviceIndex = (
+      serviceIndexResult.data || []
+    )
+      .map(
+        (service) =>
+          `${service.slug} | ${service.name}`
       )
-        .map(
-          (service) =>
-            `${service.slug} | ${service.name}`
-        )
-        .join("\n");
+      .join("\n");
 
     /*
-     * =========================================================
-     * 9. ANALISADOR INTERNO
+     * ANALISADOR INTERNO
      *
-     * Ele NÃO responde ao cliente.
-     *
-     * Apenas decide se a resposta atual
-     * depende de:
-     *
-     * - preço oficial;
-     * - contato oficial do Wal Brasil.
-     *
-     * Isso é interpretação semântica,
-     * não árvore de palavras-chave.
-     * =========================================================
+     * Agora pode resolver vários serviços no mesmo projeto.
      */
-
     const retrievalResponse =
       await openai.responses.create({
-        model:
-          "gpt-5.4-mini",
+        model: "gpt-5.4-mini",
 
         instructions: `
-Você atua apenas como analisador interno de contexto para um agente comercial.
+Você atua como analisador interno de contexto para um agente comercial.
 
-Sua função NÃO é responder ao cliente.
+Você NÃO responde ao cliente.
 
-Leia a conversa recente como um todo e determine quais dados oficiais do negócio são realmente necessários para que o agente responda adequadamente à mensagem atual.
+Analise a conversa recente e identifique somente os dados oficiais que a resposta atual precisa recuperar.
 
-Você deve analisar duas necessidades possíveis:
+PREÇO
 
-1. PREÇO OFICIAL
+Determine se a resposta depende de informação oficial de preço.
 
-Determine se a resposta atual depende de consultar o preço oficial de um serviço.
+Use toda a conversa recente para compreender referências indiretas e projetos compostos.
 
-Entenda referências contextuais como:
-"esse projeto",
-"nesse caso",
-"e quanto ficaria?",
-"quanto sairia?",
-"quanto custa?",
-ou outras formas naturais de continuar uma conversa.
+Um projeto pode envolver nenhum, um ou vários serviços cadastrados.
 
-Não dependa de palavras específicas. Interprete intenção e contexto.
+Se o cliente estiver pedindo o valor de um projeto que combina vários serviços, retorne todos os slugs relevantes em service_slugs.
 
-Se a mensagem não depender de preço oficial:
-needs_pricing = false.
+Não some preços e não invente serviços.
 
-Se depender de preço:
-- use a conversa recente para identificar qual projeto está sendo discutido;
-- escolha o serviço mais compatível entre os serviços disponíveis;
-- retorne exatamente o slug cadastrado.
+Se a resposta não precisar de preço:
+needs_pricing = false
+service_slugs = []
 
-Se houver intenção clara de obter preço, mas ainda não for possível identificar com segurança o serviço:
+Se precisar de preço e o contexto permitir identificar os serviços:
 needs_pricing = true
-service_slug = null.
+service_slugs = [slugs correspondentes]
 
-2. CONTATO OFICIAL DO WAL BRASIL
+Se precisar de preço mas o contexto ainda não permitir identificar com segurança nenhum serviço:
+needs_pricing = true
+service_slugs = []
 
-Determine se a resposta atual realmente precisa do dado oficial de contato do Wal Brasil.
+CONTATO
 
-needs_business_contact deve ser true quando o cliente estiver pedindo concretamente o contato, número, WhatsApp ou meio direto para falar com o Wal Brasil.
+Determine se a resposta atual realmente precisa do contato oficial do Wal Brasil.
 
-Também pode ser true quando, pelo estágio atual da conversa, o cliente está claramente solicitando falar diretamente com a pessoa responsável e a resposta adequada exige fornecer esse contato.
+needs_business_contact deve ser true quando o cliente estiver pedindo concretamente o WhatsApp, telefone, contato direto ou estiver claramente solicitando falar com a pessoa responsável pelo atendimento.
 
-Não marque como true apenas porque o agente poderia, em tese, oferecer atendimento humano.
+Não marque como true simplesmente porque seria possível oferecer atendimento humano.
 
-Se o cliente ainda está apenas conversando sobre o projeto e o agente consegue continuar ajudando normalmente:
-needs_business_contact = false.
-
-Não invente serviços nem dados de contato.
+Enquanto o agente conseguir continuar ajudando normalmente, o contato humano não é necessário.
 
 SERVIÇOS DISPONÍVEIS:
 
@@ -469,97 +317,93 @@ MENSAGEM ATUAL:
 ${message}
         `.trim(),
 
-        max_output_tokens:
-          180,
+        max_output_tokens: 220,
 
         text: {
           format: {
-            type:
-              "json_schema",
+            type: "json_schema",
 
-            name:
-              "business_retrieval_decision",
+            name: "business_retrieval_decision",
 
-            strict:
-              true,
+            strict: true,
 
             schema: {
-              type:
-                "object",
+              type: "object",
 
               properties: {
                 needs_pricing: {
-                  type:
-                    "boolean",
+                  type: "boolean",
                 },
 
-                service_slug: {
-                  anyOf: [
-                    {
-                      type:
-                        "string",
-                    },
-                    {
-                      type:
-                        "null",
-                    },
-                  ],
+                service_slugs: {
+                  type: "array",
+
+                  items: {
+                    type: "string",
+                  },
                 },
 
                 needs_business_contact: {
-                  type:
-                    "boolean",
+                  type: "boolean",
                 },
 
                 reasoning_summary: {
-                  type:
-                    "string",
+                  type: "string",
                 },
               },
 
               required: [
                 "needs_pricing",
-                "service_slug",
+                "service_slugs",
                 "needs_business_contact",
                 "reasoning_summary",
               ],
 
-              additionalProperties:
-                false,
+              additionalProperties: false,
             },
           },
         },
       });
 
-    if (
-      !retrievalResponse.output_text
-    ) {
+    if (!retrievalResponse.output_text) {
       throw new Error(
         "A etapa de recuperação não retornou conteúdo."
       );
     }
 
-    const retrievalDecision =
-      JSON.parse(
-        retrievalResponse.output_text
-      ) as RetrievalDecision;
+    const retrievalDecision = JSON.parse(
+      retrievalResponse.output_text
+    ) as RetrievalDecision;
 
     /*
-     * =========================================================
-     * 10. RECUPERAÇÃO SELETIVA DE PREÇO
-     * =========================================================
+     * Garante apenas slugs realmente existentes.
      */
+    const validServiceSlugs = new Set(
+      (serviceIndexResult.data || []).map(
+        (service) => service.slug
+      )
+    );
 
-    let officialPricingContext =
-      "";
+    const requestedServiceSlugs = [
+      ...new Set(
+        (retrievalDecision.service_slugs || []).filter(
+          (slug) => validServiceSlugs.has(slug)
+        )
+      ),
+    ].slice(0, 5);
+
+    /*
+     * PREÇOS OFICIAIS
+     */
+    let officialPricingContext = "";
 
     if (
       retrievalDecision.needs_pricing &&
-      retrievalDecision.service_slug
+      requestedServiceSlugs.length > 0
     ) {
       const {
-        data: service,
-        error: serviceError,
+        data: services,
+        error: servicesError,
       } = await supabase
         .from("services")
         .select(`
@@ -572,97 +416,85 @@ ${message}
           delivery_max_days,
           notes
         `)
-        .eq(
-          "slug",
-          retrievalDecision.service_slug
-        )
-        .eq(
-          "active",
-          true
-        )
-        .maybeSingle();
+        .in("slug", requestedServiceSlugs)
+        .eq("active", true);
 
-      if (serviceError) {
-        throw serviceError;
+      if (servicesError) {
+        throw servicesError;
       }
 
-      if (service) {
-        const price =
-          service.price_min !==
-            null &&
-          service.price_max !==
-            null
-            ? `R$ ${Number(
-                service.price_min
-              ).toLocaleString(
-                "pt-BR"
-              )} a R$ ${Number(
-                service.price_max
-              ).toLocaleString(
-                "pt-BR"
-              )}`
-            : "Não há faixa oficial cadastrada.";
+      if (services && services.length > 0) {
+        const orderedServices = requestedServiceSlugs
+          .map((slug) =>
+            services.find(
+              (service) => service.slug === slug
+            )
+          )
+          .filter(Boolean);
+
+        const blocks = orderedServices.map((service) => {
+          if (!service) {
+            return "";
+          }
+
+          const price =
+            service.price_min !== null &&
+            service.price_max !== null
+              ? `R$ ${Number(
+                  service.price_min
+                ).toLocaleString(
+                  "pt-BR"
+                )} a R$ ${Number(
+                  service.price_max
+                ).toLocaleString(
+                  "pt-BR"
+                )}`
+              : "Não há faixa oficial cadastrada.";
+
+          return `
+SERVIÇO: ${service.name}
+FAIXA INICIAL: ${price}
+DESCRIÇÃO: ${service.description || "Não cadastrada."}
+OBSERVAÇÕES: ${service.notes || "Nenhuma."}
+          `.trim();
+        });
 
         officialPricingContext = `
 DADOS OFICIAIS DE PREÇO
 
-Serviço identificado:
-${service.name}
+${blocks.join("\n\n")}
 
-Faixa inicial de referência:
-${price}
+As faixas acima são referências individuais dos serviços cadastrados.
 
-Descrição:
-${service.description || "Não cadastrada."}
-
-Observações:
-${service.notes || "Nenhuma observação adicional."}
-
-Esses dados são a fonte oficial para esta resposta.
+Quando o projeto combinar mais de um serviço, não trate a soma das faixas como orçamento fechado. Use os dados para orientar a conversa e explique naturalmente que a proposta final depende do conjunto do escopo.
         `.trim();
       }
     }
 
-    /*
-     * Se há intenção de preço,
-     * mas não conseguimos resolver
-     * o serviço com segurança.
-     */
     if (
       retrievalDecision.needs_pricing &&
       !officialPricingContext
     ) {
       officialPricingContext = `
-O cliente deseja informação de preço, mas ainda não há dados suficientes para identificar com segurança qual serviço oficial deve ser usado como referência.
+O cliente deseja informação de preço, mas ainda não foi possível identificar com segurança um serviço oficial correspondente.
 
-Não invente valor.
+Não invente valores.
 
-Use o contexto da conversa e, apenas se realmente necessário, peça uma informação curta que permita compreender melhor o projeto.
+Use a conversa recente e, apenas se realmente necessário, peça uma informação curta que permita compreender melhor o projeto.
       `.trim();
     }
 
     /*
-     * =========================================================
-     * 11. RECUPERAÇÃO SELETIVA DO CONTATO
-     *
-     * O WhatsApp só é buscado quando
-     * a conversa realmente precisa dele.
-     * =========================================================
+     * CONTATO OFICIAL
      */
+    let officialContactContext = "";
 
-    let officialContactContext =
-      "";
-
-    if (
-      retrievalDecision.needs_business_contact
-    ) {
+    if (retrievalDecision.needs_business_contact) {
       const {
         data: businessContact,
         error: businessContactError,
       } = await supabase
-        .from(
-          "business_info"
-        )
+        .from("business_info")
         .select(
           "info_key, info_value, description"
         )
@@ -670,15 +502,10 @@ Use o contexto da conversa e, apenas se realmente necessário, peça uma informa
           "info_key",
           "whatsapp_wal_brasil"
         )
-        .eq(
-          "active",
-          true
-        )
+        .eq("active", true)
         .maybeSingle();
 
-      if (
-        businessContactError
-      ) {
+      if (businessContactError) {
         throw businessContactError;
       }
 
@@ -686,38 +513,12 @@ Use o contexto da conversa e, apenas se realmente necessário, peça uma informa
         const rawPhone =
           businessContact.info_value;
 
-        let formattedPhone =
-          rawPhone;
+        let formattedPhone = rawPhone;
 
-        /*
-         * Formata números brasileiros
-         * no padrão:
-         * (17) 99680-2980
-         *
-         * Mantemos também o número
-         * internacional para links.
-         */
-        if (
-          /^55\d{11}$/.test(
-            rawPhone
-          )
-        ) {
-          const ddd =
-            rawPhone.slice(
-              2,
-              4
-            );
-
-          const firstPart =
-            rawPhone.slice(
-              4,
-              9
-            );
-
-          const secondPart =
-            rawPhone.slice(
-              9
-            );
+        if (/^55\d{11}$/.test(rawPhone)) {
+          const ddd = rawPhone.slice(2, 4);
+          const firstPart = rawPhone.slice(4, 9);
+          const secondPart = rawPhone.slice(9);
 
           formattedPhone =
             `(${ddd}) ${firstPart}-${secondPart}`;
@@ -726,109 +527,81 @@ Use o contexto da conversa e, apenas se realmente necessário, peça uma informa
         officialContactContext = `
 CONTATO OFICIAL DO WAL BRASIL
 
-WhatsApp:
-${formattedPhone}
+WhatsApp: ${formattedPhone}
+Número internacional: ${rawPhone}
+Link direto: https://wa.me/${rawPhone}
 
-Número internacional:
-${rawPhone}
-
-Link direto:
-https://wa.me/${rawPhone}
-
-Descrição:
-${businessContact.description || "Contato oficial do Wal Brasil."}
-
-Esses dados são a fonte oficial para esta resposta.
+${businessContact.description || ""}
         `.trim();
       } else {
         officialContactContext = `
-O cliente deseja falar diretamente com o Wal Brasil, mas não existe contato oficial ativo disponível na base neste momento.
+O cliente deseja falar diretamente com o Wal Brasil, mas não existe contato oficial ativo disponível.
 
-Não invente número de telefone nem use placeholders.
+Não invente telefone e não use placeholders.
         `.trim();
       }
     }
 
-    /*
-     * =========================================================
-     * 12. CONTEXTO OFICIAL COMPACTO
-     * =========================================================
-     */
-
-    const officialContexts =
-      [
-        officialPricingContext,
-        officialContactContext,
-      ]
-        .filter(Boolean)
-        .join("\n\n");
+    const officialContexts = [
+      officialPricingContext,
+      officialContactContext,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
 
     /*
-     * =========================================================
-     * 13. AGENTE PRINCIPAL
-     *
-     * Esta é a única etapa que conversa
-     * com o cliente.
-     * =========================================================
+     * AGENTE PRINCIPAL
      */
-
     const aiResponse =
       await openai.responses.create({
-        model:
-          "gpt-5.4-mini",
+        model: "gpt-5.4-mini",
 
         instructions: `
-Você representa comercialmente o @walbrasil.dev.
-
-Quando o cliente estiver discutindo um projeto, serviço ou orçamento, não o oriente como se ele precisasse procurar outro desenvolvedor ou outra empresa. O atendimento é do próprio @walbrasil.dev.
-
-Você pode estruturar ideias, requisitos, escopo e informações para ajudar o cliente a avançar no próprio atendimento.
-
-Quando o cliente pedir para falar com uma pessoa, vendedor, técnico, responsável ou alguém que possa fechar o projeto, entenda isso naturalmente como um pedido para falar diretamente com o Wal Brasil.
+Você é o agente de IA do @walbrasil.dev e representa comercialmente os serviços oferecidos pelo próprio @walbrasil.dev.
 
 Converse em português brasileiro de forma natural, inteligente, profissional e humana.
 
-Entenda primeiro o que o cliente quer e use o contexto da conversa.
+Entenda o que o cliente quer usando o contexto da conversa.
+
+Assuma, salvo quando o cliente disser claramente o contrário, que os serviços e projetos discutidos podem ser realizados pelo próprio @walbrasil.dev.
+
+Não oriente o cliente como se ele precisasse procurar outro desenvolvedor, técnico, vendedor ou empresa para executar aquilo que está discutindo com você.
+
+Você pode conversar livremente, explicar possibilidades, discutir soluções e raciocinar tecnicamente.
 
 Não aja como menu de atendimento, formulário ou árvore de decisão.
 
-Você pode conversar livremente, explicar possibilidades, discutir ideias, sugerir soluções e fazer perguntas quando elas realmente ajudarem.
+Não faça perguntas apenas para cumprir roteiro.
 
 Converse com autonomia e procure resolver o máximo possível diretamente com o cliente.
 
-Não ofereça atendimento humano cedo demais e não use a transferência como fechamento padrão de respostas.
+Não ofereça atendimento humano cedo demais.
 
-A opção de falar diretamente com o Wal Brasil existe como continuação natural do atendimento quando o cliente pedir uma pessoa, quiser avançar para proposta, negociação ou fechamento, ou quando a conversa chegar a um ponto em que a participação humana realmente agregue valor.
+Enquanto conseguir compreender, orientar e responder adequadamente, continue a conversa normalmente.
 
-Enquanto você conseguir compreender, orientar e responder adequadamente, continue a conversa normalmente.
+Quando o cliente pedir contato direto, pessoa responsável, proposta, negociação ou fechamento, você pode encaminhá-lo naturalmente para falar com o Wal Brasil usando os dados oficiais recebidos.
 
-Não repita a oferta de contato humano se ela já tiver sido apresentada recentemente.
-
-Não faça perguntas apenas para cumprir um roteiro.
-
-Não repita informações que o cliente já forneceu.
+Não repita essa oferta sem necessidade.
 
 Quando receber dados oficiais do negócio, trate-os como fonte de verdade.
 
-Não invente preços, políticas, prazos, contatos ou outras informações comerciais que não tenham sido fornecidas oficialmente.
+Não invente preços, prazos, contatos, políticas ou condições comerciais ausentes.
 
-Adapte a resposta ao estágio e ao tom da conversa.
+Se receber dados oficiais de vários serviços que fazem parte do mesmo projeto, considere o conjunto do contexto.
 
-Prefira respostas adequadas para um chat de site: claras e naturais, sem serem artificialmente curtas.
+Não some automaticamente faixas de preço como se fossem um orçamento fechado.
 
-Conduza a conversa de forma natural e deixe espaço para o cliente responder.
+Adapte a resposta ao estágio, intenção e tom da conversa.
 
-Não sinta necessidade de terminar todas as mensagens com uma pergunta, convite ou oferta de ajuda adicional.
+Deixe a conversa respirar.
 
-Evite repetir fórmulas como "Se quiser, eu posso..." apenas para manter a conversa andando.
+Não tente prolongar artificialmente cada resposta.
 
-Sugira próximos passos somente quando isso realmente fizer sentido no contexto.
+Depois de responder adequadamente, você pode simplesmente encerrar a mensagem e esperar o cliente.
 
-Não tente prolongar a conversa artificialmente.
+Sugira próximos passos somente quando eles surgirem naturalmente e realmente agregarem valor.
 
-Depois de responder bem ao que o cliente pediu, você pode simplesmente encerrar a resposta e esperar a próxima mensagem.
-
-Sugira um próximo passo apenas quando ele surgir naturalmente da conversa e realmente agregar valor.
+Evite transformar expressões como "Se quiser, eu posso..." em um fechamento repetitivo.
 
 MEMÓRIA ÚTIL DO VISITANTE:
 
@@ -847,7 +620,6 @@ Além da resposta, identifique somente fatos novos, úteis e explicitamente info
 Não transforme cada frase em memória.
 
 Exemplos úteis:
-
 nome
 empresa
 cidade
@@ -875,61 +647,45 @@ memory_updates deve ser [].
 Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
         `.trim(),
 
-        input:
-          conversationHistory,
+        input: conversationHistory,
 
-        max_output_tokens:
-          500,
+        max_output_tokens: 550,
 
         text: {
           format: {
-            type:
-              "json_schema",
+            type: "json_schema",
 
-            name:
-              "walbrasil_web_agent_response",
+            name: "walbrasil_web_agent_response",
 
-            strict:
-              true,
+            strict: true,
 
             schema: {
-              type:
-                "object",
+              type: "object",
 
               properties: {
                 reply: {
-                  type:
-                    "string",
+                  type: "string",
                 },
 
                 memory_updates: {
-                  type:
-                    "array",
+                  type: "array",
 
                   items: {
-                    type:
-                      "object",
+                    type: "object",
 
                     properties: {
                       fact_key: {
-                        type:
-                          "string",
+                        type: "string",
                       },
 
                       fact_value: {
-                        type:
-                          "string",
+                        type: "string",
                       },
 
                       confidence: {
-                        type:
-                          "number",
-
-                        minimum:
-                          0,
-
-                        maximum:
-                          1,
+                        type: "number",
+                        minimum: 0,
+                        maximum: 1,
                       },
                     },
 
@@ -939,8 +695,7 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
                       "confidence",
                     ],
 
-                    additionalProperties:
-                      false,
+                    additionalProperties: false,
                   },
                 },
               },
@@ -950,21 +705,13 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
                 "memory_updates",
               ],
 
-              additionalProperties:
-                false,
+              additionalProperties: false,
             },
           },
         },
       });
 
-    /*
-     * =========================================================
-     * 14. PROCESSA RESPOSTA
-     * =========================================================
-     */
-
-    const rawOutput =
-      aiResponse.output_text;
+    const rawOutput = aiResponse.output_text;
 
     if (!rawOutput) {
       throw new Error(
@@ -972,13 +719,11 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
       );
     }
 
-    const agentResult =
-      JSON.parse(
-        rawOutput
-      ) as AgentResult;
+    const agentResult = JSON.parse(
+      rawOutput
+    ) as AgentResult;
 
-    const aiText =
-      agentResult.reply?.trim();
+    const aiText = agentResult.reply?.trim();
 
     if (!aiText) {
       throw new Error(
@@ -987,171 +732,101 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
     }
 
     /*
-     * =========================================================
-     * 15. MEMÓRIA PERSISTENTE
-     * =========================================================
+     * MEMÓRIA
      */
-
-    const memoryUpdates =
-      (
-        agentResult.memory_updates ||
-        []
+    const memoryUpdates = (
+      agentResult.memory_updates || []
+    )
+      .filter(
+        (memory) =>
+          memory.fact_key &&
+          memory.fact_value &&
+          memory.confidence >= 0.7
       )
-        .filter(
-          (memory) =>
-            memory.fact_key &&
-            memory.fact_value &&
-            memory.confidence >=
-              0.7
-        )
-        .slice(
-          0,
-          5
-        );
+      .slice(0, 5);
 
-    const now =
-      new Date().toISOString();
+    const now = new Date().toISOString();
 
     const databaseOperations: PromiseLike<unknown>[] =
       [];
 
-    /*
-     * Salva resposta.
-     */
     databaseOperations.push(
       supabase
-        .from(
-          "web_messages"
-        )
+        .from("web_messages")
         .insert({
-          conversation_id:
-            conversation.id,
-
-          role:
-            "assistant",
-
-          content:
-            aiText,
+          conversation_id: conversation.id,
+          role: "assistant",
+          content: aiText,
         })
-        .then(
-          (result) => {
-            if (
-              result.error
-            ) {
-              throw result.error;
-            }
-
-            return result;
+        .then((result) => {
+          if (result.error) {
+            throw result.error;
           }
-        )
+
+          return result;
+        })
     );
 
-    /*
-     * Atualiza conversa.
-     */
     databaseOperations.push(
       supabase
-        .from(
-          "web_conversations"
-        )
+        .from("web_conversations")
         .update({
-          last_message_at:
-            now,
+          last_message_at: now,
         })
-        .eq(
-          "id",
-          conversation.id
-        )
-        .then(
-          (result) => {
-            if (
-              result.error
-            ) {
-              throw result.error;
-            }
-
-            return result;
+        .eq("id", conversation.id)
+        .then((result) => {
+          if (result.error) {
+            throw result.error;
           }
-        )
+
+          return result;
+        })
     );
 
-    /*
-     * Atualiza memória.
-     */
-    if (
-      memoryUpdates.length >
-      0
-    ) {
-      const memoryRows =
-        memoryUpdates.map(
-          (memory) => ({
-            visitor_id:
-              visitor.id,
+    if (memoryUpdates.length > 0) {
+      const memoryRows = memoryUpdates.map(
+        (memory) => ({
+          visitor_id: visitor.id,
 
-            fact_key:
-              memory.fact_key
-                .trim()
-                .toLowerCase()
-                .replace(
-                  /[^a-z0-9_à-ÿ]/gi,
-                  "_"
-                )
-                .replace(
-                  /_+/g,
-                  "_"
-                )
-                .replace(
-                  /^_+|_+$/g,
-                  ""
-                ),
+          fact_key: memory.fact_key
+            .trim()
+            .toLowerCase()
+            .replace(
+              /[^a-z0-9_à-ÿ]/gi,
+              "_"
+            )
+            .replace(/_+/g, "_")
+            .replace(/^_+|_+$/g, ""),
 
-            fact_value:
-              memory.fact_value.trim(),
+          fact_value: memory.fact_value.trim(),
 
-            confidence:
-              memory.confidence,
+          confidence: memory.confidence,
 
-            source:
-              "web_chat",
-          })
-        );
+          source: "web_chat",
+        })
+      );
 
       databaseOperations.push(
         supabase
-          .from(
-            "web_memory"
-          )
-          .upsert(
-            memoryRows,
-            {
-              onConflict:
-                "visitor_id,fact_key",
+          .from("web_memory")
+          .upsert(memoryRows, {
+            onConflict: "visitor_id,fact_key",
+          })
+          .then((result) => {
+            if (result.error) {
+              throw result.error;
             }
-          )
-          .then(
-            (result) => {
-              if (
-                result.error
-              ) {
-                throw result.error;
-              }
 
-              return result;
-            }
-          )
+            return result;
+          })
       );
     }
 
-    await Promise.all(
-      databaseOperations
-    );
+    await Promise.all(databaseOperations);
 
     /*
-     * =========================================================
-     * 16. LOGS
-     * =========================================================
+     * LOGS
      */
-
     console.log(
       "=== AGENTE WEB @WALBRASIL.DEV ==="
     );
@@ -1162,47 +837,37 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
     );
 
     console.log(
-      "Histórico carregado:",
+      "Histórico:",
       conversationHistory.length
     );
 
     console.log(
-      "Memórias carregadas:",
-      memoriesResult.data
-        ?.length || 0
-    );
-
-    console.log(
-      "Precisa consultar preço:",
+      "Precisa preço:",
       retrievalDecision.needs_pricing
     );
 
     console.log(
-      "Serviço identificado:",
-      retrievalDecision.service_slug
+      "Serviços identificados:",
+      requestedServiceSlugs
     );
 
     console.log(
-      "Precisa contato oficial:",
+      "Precisa contato:",
       retrievalDecision.needs_business_contact
     );
 
     console.log(
       "Preço recuperado:",
-      Boolean(
-        officialPricingContext
-      )
+      Boolean(officialPricingContext)
     );
 
     console.log(
       "Contato recuperado:",
-      Boolean(
-        officialContactContext
-      )
+      Boolean(officialContactContext)
     );
 
     console.log(
-      "Resumo da decisão:",
+      "Decisão:",
       retrievalDecision.reasoning_summary
     );
 
@@ -1225,23 +890,11 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
       "================================"
     );
 
-    /*
-     * =========================================================
-     * 17. RESPOSTA PARA O SITE
-     * =========================================================
-     */
-
     return NextResponse.json({
-      status:
-        "ok",
-
-      reply:
-        aiText,
-
+      status: "ok",
+      reply: aiText,
       visitorToken,
-
-      memoriesUpdated:
-        memoryUpdates.length,
+      memoriesUpdated: memoryUpdates.length,
     });
   } catch (error) {
     console.error(
@@ -1251,15 +904,12 @@ Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
 
     return NextResponse.json(
       {
-        status:
-          "error",
-
+        status: "error",
         error:
           "Não foi possível processar a mensagem.",
       },
       {
-        status:
-          500,
+        status: 500,
       }
     );
   }
