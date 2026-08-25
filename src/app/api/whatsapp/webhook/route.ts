@@ -3,12 +3,9 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const GRAPH_API_VERSION = "v26.0";
-
-// Mantemos o contexto pequeno para reduzir custo e latência.
 const HISTORY_LIMIT = 8;
-
-// Limitamos também a quantidade de memórias enviadas ao modelo.
 const MEMORY_LIMIT = 20;
+const SERVICES_LIMIT = 20;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -52,8 +49,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json(
     {
-      error:
-        "Falha na verificação do webhook.",
+      error: "Falha na verificação do webhook.",
     },
     {
       status: 403,
@@ -61,9 +57,7 @@ export async function GET(request: NextRequest) {
   );
 }
 
-export async function POST(
-  request: NextRequest
-) {
+export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
@@ -80,8 +74,7 @@ export async function POST(
       value?.contacts?.[0];
 
     /*
-     * Eventos de status, entrega, leitura etc.
-     * não devem gerar resposta.
+     * Ignora status, leitura, entrega etc.
      */
     if (!message) {
       return NextResponse.json({
@@ -108,8 +101,7 @@ export async function POST(
       "Sem nome";
 
     /*
-     * Neste estágio respondemos somente
-     * mensagens reais de texto.
+     * Neste estágio respondemos apenas texto.
      */
     if (
       !from ||
@@ -141,8 +133,7 @@ export async function POST(
 
       return NextResponse.json(
         {
-          status:
-            "configuration_error",
+          status: "configuration_error",
         },
         {
           status: 500,
@@ -151,7 +142,7 @@ export async function POST(
     }
 
     /*
-     * 1. Localiza ou cria o contato.
+     * 1. Localiza ou cria contato.
      */
     const {
       data: contactRecord,
@@ -237,10 +228,9 @@ export async function POST(
     }
 
     /*
-     * 4. Salva a mensagem recebida.
-     *
-     * O índice UNIQUE em
-     * whatsapp_message_id evita retries.
+     * 4. Salva mensagem recebida.
+     * UNIQUE no whatsapp_message_id
+     * evita respostas duplicadas.
      */
     const {
       error: userMessageError,
@@ -260,8 +250,6 @@ export async function POST(
         });
 
     if (userMessageError) {
-      // PostgreSQL 23505 =
-      // violação de UNIQUE.
       if (
         userMessageError.code ===
         "23505"
@@ -272,8 +260,7 @@ export async function POST(
         );
 
         return NextResponse.json({
-          status:
-            "duplicate_ignored",
+          status: "duplicate_ignored",
         });
       }
 
@@ -281,12 +268,17 @@ export async function POST(
     }
 
     /*
-     * 5. Busca memória recente
-     * e memória persistente em paralelo.
+     * 5. Busca tudo que a IA precisa
+     * em paralelo:
+     *
+     * - conversa recente
+     * - memória persistente
+     * - serviços/preços/prazos da Wal Brasil
      */
     const [
       recentMessagesResult,
       memoriesResult,
+      servicesResult,
     ] = await Promise.all([
       supabase
         .from("messages")
@@ -315,6 +307,24 @@ export async function POST(
           ascending: false,
         })
         .limit(MEMORY_LIMIT),
+
+      supabase
+        .from("services")
+        .select(`
+          slug,
+          name,
+          description,
+          price_min,
+          price_max,
+          delivery_min_days,
+          delivery_max_days,
+          notes
+        `)
+        .eq("active", true)
+        .order("price_min", {
+          ascending: true,
+        })
+        .limit(SERVICES_LIMIT),
     ]);
 
     if (
@@ -327,8 +337,12 @@ export async function POST(
       throw memoriesResult.error;
     }
 
+    if (servicesResult.error) {
+      throw servicesResult.error;
+    }
+
     /*
-     * 6. Organiza histórico recente.
+     * 6. Histórico recente.
      */
     const conversationHistory =
       (
@@ -348,8 +362,7 @@ export async function POST(
         }));
 
     /*
-     * 7. Transforma memória persistente
-     * em um bloco curto para economizar tokens.
+     * 7. Memória persistente compacta.
      */
     const persistentMemory =
       (
@@ -363,60 +376,138 @@ export async function POST(
         .join("\n");
 
     /*
-     * 8. Uma única chamada à OpenAI.
+     * 8. Base comercial compacta.
+     */
+    const commercialServices =
+      (
+        servicesResult.data ||
+        []
+      )
+        .map((service) => {
+          const price =
+            service.price_min !== null &&
+            service.price_max !== null
+              ? `R$ ${Number(
+                  service.price_min
+                ).toLocaleString(
+                  "pt-BR"
+                )} a R$ ${Number(
+                  service.price_max
+                ).toLocaleString(
+                  "pt-BR"
+                )}`
+              : "sob consulta";
+
+          const delivery =
+            service.delivery_min_days !== null &&
+            service.delivery_max_days !== null
+              ? `${service.delivery_min_days} a ${service.delivery_max_days} dias`
+              : "sob consulta";
+
+          return [
+            `SERVIÇO: ${service.name}`,
+            `Descrição: ${service.description || "-"}`,
+            `Faixa de preço: ${price}`,
+            `Prazo típico: ${delivery}`,
+            service.notes
+              ? `Observação: ${service.notes}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join("\n");
+        })
+        .join("\n\n");
+
+    /*
+     * 9. UMA chamada à OpenAI.
      *
-     * Ela:
-     * - responde ao usuário;
-     * - identifica novos fatos úteis;
-     * - devolve tudo estruturado.
+     * Ela responde e identifica fatos
+     * novos para memória persistente.
      */
     const aiResponse =
       await openai.responses.create({
         model: "gpt-5.4-mini",
 
         instructions: `
-Você é o assistente virtual da Wal Brasil.
+Você é o assistente comercial virtual da Wal Brasil.
 
 Você conversa com clientes pelo WhatsApp em português brasileiro.
 
-OBJETIVO
+Seu objetivo é compreender o que a pessoa precisa, explicar os serviços da Wal Brasil de forma natural e ajudar o potencial cliente a avançar na decisão.
 
-Converse naturalmente, compreenda o contexto e ajude o usuário de forma clara e profissional.
+=========================
+MEMÓRIA DO CONTATO
+=========================
 
-MEMÓRIA PERSISTENTE DO CONTATO
+Use estes fatos quando forem relevantes.
 
-Abaixo podem existir fatos que foram aprendidos anteriormente sobre esta pessoa.
-
-Use esses fatos quando forem relevantes.
-
-Não mencione que existe um banco de dados ou sistema de memória.
-
-MEMÓRIA ATUAL:
+Não diga que possui um banco de dados ou sistema de memória.
 
 ${persistentMemory || "Nenhuma memória persistente ainda."}
 
-REGRAS DE CONVERSA
+=========================
+SERVIÇOS DA WAL BRASIL
+=========================
+
+Esta é a base comercial oficial disponível neste momento:
+
+${commercialServices || "Nenhum serviço comercial cadastrado."}
+
+=========================
+REGRAS COMERCIAIS
+=========================
+
+Quando o cliente perguntar se a Wal Brasil realiza determinado serviço, use a base comercial acima.
+
+Quando o cliente perguntar preço:
+
+- use somente as faixas cadastradas;
+- não invente valores;
+- deixe claro que é uma faixa inicial de referência;
+- explique brevemente que o valor final depende do escopo;
+- não fuja da pergunta se existir um serviço correspondente na base.
+
+Quando o cliente perguntar prazo:
+
+- use o prazo típico cadastrado;
+- deixe claro que é uma estimativa inicial;
+- o prazo final depende do escopo e da disponibilidade.
+
+Se o projeto combinar dois ou mais serviços, não some preços mecanicamente.
+
+Nesse caso, explique que será necessário analisar o conjunto para definir uma proposta.
+
+Se o pedido não se encaixar claramente em nenhum serviço cadastrado, diga que é necessário analisar o escopo antes de estimar.
+
+Não prometa desconto automaticamente.
+
+Não prometa preço fechado sem conhecer o escopo.
+
+Não invente funcionalidades que não estejam disponíveis no contexto.
+
+=========================
+CONVERSA
+=========================
 
 - Responda somente à mensagem atual do usuário.
 - Nunca envie follow-up por iniciativa própria.
 - Nunca cobre uma resposta.
 - Nunca insista para continuar a conversa.
 - Não repita perguntas já respondidas.
-- Evite repetir saudações durante uma conversa em andamento.
+- Evite saudações repetidas.
 - Prefira respostas curtas e naturais para WhatsApp.
 - Normalmente use 1 ou 2 parágrafos curtos.
-- Só escreva respostas longas quando o usuário pedir detalhes.
+- Só escreva respostas longas quando solicitado.
 - Não transforme toda resposta em pergunta.
-- Se puder responder diretamente, responda e encerre naturalmente.
-- Não invente preços, prazos, serviços ou condições específicas da Wal Brasil.
+- Se puder responder diretamente, responda diretamente.
 
+=========================
 MEMÓRIA DE LONGO PRAZO
+=========================
 
-Além da resposta, identifique fatos novos e úteis que o usuário revelou EXPLICITAMENTE NA MENSAGEM ATUAL.
+Além da resposta, identifique somente fatos NOVOS e úteis que o usuário revelou explicitamente na mensagem atual.
 
-Salve somente informações que tenham boa chance de ser úteis em conversas futuras.
-
-Exemplos adequados:
+Exemplos:
 
 nome
 idade
@@ -434,35 +525,22 @@ segmento_empresa
 
 Use fact_key curto, em português e snake_case.
 
-Exemplo:
+Não salve fatos triviais.
 
-fact_key: "idade"
-fact_value: "22"
+Não salve inferências como fatos.
 
-Outro exemplo:
+Não salve algo apenas porque apareceu no histórico.
 
-fact_key: "tipo_projeto"
-fact_value: "site para clínica"
+Se o usuário corrigir informação anterior, reutilize a mesma fact_key com o novo valor.
 
-IMPORTANTE:
+Não salve senhas, tokens, credenciais, dados bancários ou documentos.
 
-- Não crie memória para cada frase.
-- Não salve fatos triviais ou momentâneos.
-- Não transforme inferências em fatos.
-- Não salve algo apenas porque apareceu no histórico antigo.
-- memory_updates deve refletir apenas fatos novos ou correções presentes na mensagem ATUAL do usuário.
-- Se o usuário corrigir informação anterior, use a mesma fact_key com o novo valor.
-- Não salve senhas, tokens, documentos, dados bancários ou credenciais.
-- Não salve informações médicas, políticas, religiosas ou outras informações pessoais sensíveis.
-- Se não houver nada útil para memorizar, retorne memory_updates vazio.
+Não salve informações pessoais sensíveis.
 
-CONFIDENCE
+Se não existir novo fato útil:
+memory_updates deve ser vazio.
 
-Use 1.0 quando o usuário declarou o fato diretamente.
-
-Use um valor menor apenas se houver pequena ambiguidade.
-
-Não salve fatos muito incertos.
+Use confidence 1.0 para fatos explicitamente declarados.
         `.trim(),
 
         input:
@@ -495,18 +573,15 @@ Não salve fatos muito incertos.
 
                     properties: {
                       fact_key: {
-                        type:
-                          "string",
+                        type: "string",
                       },
 
                       fact_value: {
-                        type:
-                          "string",
+                        type: "string",
                       },
 
                       confidence: {
-                        type:
-                          "number",
+                        type: "number",
                         minimum: 0,
                         maximum: 1,
                       },
@@ -537,7 +612,7 @@ Não salve fatos muito incertos.
       });
 
     /*
-     * 9. Converte JSON estruturado.
+     * 10. Processa retorno estruturado.
      */
     const rawOutput =
       aiResponse.output_text;
@@ -563,10 +638,7 @@ Não salve fatos muito incertos.
     }
 
     /*
-     * 10. Sanitiza memórias.
-     *
-     * Mesmo usando JSON Schema,
-     * fazemos uma proteção adicional.
+     * 11. Filtra memória.
      */
     const memoryUpdates =
       (
@@ -582,15 +654,15 @@ Não salve fatos muito incertos.
         )
         .slice(0, 5);
 
-    /*
-     * 11. Prepara gravação da resposta.
-     */
     const now =
       new Date().toISOString();
 
     const databaseOperations: PromiseLike<unknown>[] =
       [];
 
+    /*
+     * 12. Salva resposta.
+     */
     databaseOperations.push(
       supabase
         .from("messages")
@@ -611,6 +683,9 @@ Não salve fatos muito incertos.
         })
     );
 
+    /*
+     * 13. Atualiza conversa.
+     */
     databaseOperations.push(
       supabase
         .from("conversations")
@@ -632,8 +707,7 @@ Não salve fatos muito incertos.
     );
 
     /*
-     * 12. Salva somente memórias novas
-     * ou atualiza fatos existentes.
+     * 14. Atualiza memória persistente.
      */
     if (
       memoryUpdates.length > 0
@@ -695,7 +769,7 @@ Não salve fatos muito incertos.
     );
 
     /*
-     * 13. Envia UMA resposta para o WhatsApp.
+     * 15. Envia resposta ao WhatsApp.
      */
     const whatsappResponse =
       await fetch(
@@ -737,12 +811,6 @@ Não salve fatos muito incertos.
     const whatsappData =
       await whatsappResponse.json();
 
-    /*
-     * Já processamos a entrada.
-     * Não devolvemos 500 por falha
-     * somente na saída para evitar
-     * retries indesejados da Meta.
-     */
     if (
       !whatsappResponse.ok
     ) {
@@ -772,8 +840,14 @@ Não salve fatos muito incertos.
     );
 
     console.log(
-      "Memórias recuperadas:",
+      "Memórias:",
       memoriesResult.data
+        ?.length || 0
+    );
+
+    console.log(
+      "Serviços carregados:",
+      servicesResult.data
         ?.length || 0
     );
 
@@ -798,6 +872,10 @@ Não salve fatos muito incertos.
 
       memoriesUpdated:
         memoryUpdates.length,
+
+      servicesLoaded:
+        servicesResult.data
+          ?.length || 0,
     });
   } catch (error) {
     console.error(
