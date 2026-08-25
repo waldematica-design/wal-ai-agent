@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
-const HISTORY_LIMIT = 8;
+const HISTORY_LIMIT = 10;
 const MEMORY_LIMIT = 20;
-const SERVICES_LIMIT = 20;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -26,6 +25,12 @@ type AgentResult = {
   memory_updates: MemoryUpdate[];
 };
 
+type RetrievalDecision = {
+  needs_pricing: boolean;
+  service_slug: string | null;
+  reasoning_summary: string;
+};
+
 type ChatRequestBody = {
   message?: string;
   visitorToken?: string;
@@ -33,12 +38,20 @@ type ChatRequestBody = {
 
 export async function POST(request: NextRequest) {
   try {
+    /*
+     * =========================================================
+     * 1. CONFIGURAÇÃO
+     * =========================================================
+     */
+
     if (
       !process.env.OPENAI_API_KEY ||
       !process.env.SUPABASE_URL ||
       !process.env.SUPABASE_SECRET_KEY
     ) {
-      console.error("Variáveis de ambiente obrigatórias não configuradas.");
+      console.error(
+        "Variáveis de ambiente obrigatórias não configuradas."
+      );
 
       return NextResponse.json(
         {
@@ -67,15 +80,14 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * O navegador guardará este token.
-     * Se for a primeira conversa, criamos um novo.
+     * =========================================================
+     * 2. VISITANTE
+     * =========================================================
      */
+
     const visitorToken =
       body.visitorToken?.trim() || crypto.randomUUID();
 
-    /*
-     * 1. Procura o visitante.
-     */
     let {
       data: visitor,
       error: visitorLookupError,
@@ -89,14 +101,8 @@ export async function POST(request: NextRequest) {
       throw visitorLookupError;
     }
 
-    /*
-     * 2. Cria visitante na primeira mensagem.
-     */
     if (!visitor) {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("web_visitors")
         .insert({
           visitor_token: visitorToken,
@@ -112,8 +118,11 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 3. Procura conversa ativa.
+     * =========================================================
+     * 3. CONVERSA ATIVA
+     * =========================================================
      */
+
     let {
       data: conversation,
       error: conversationLookupError,
@@ -132,14 +141,8 @@ export async function POST(request: NextRequest) {
       throw conversationLookupError;
     }
 
-    /*
-     * 4. Cria conversa se necessário.
-     */
     if (!conversation) {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from("web_conversations")
         .insert({
           visitor_id: visitor.id,
@@ -156,11 +159,12 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 5. Salva mensagem do visitante.
+     * =========================================================
+     * 4. SALVA A MENSAGEM ATUAL
+     * =========================================================
      */
-    const {
-      error: userMessageError,
-    } = await supabase
+
+    const { error: userMessageError } = await supabase
       .from("web_messages")
       .insert({
         conversation_id: conversation.id,
@@ -173,16 +177,22 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 6. Busca em paralelo:
+     * =========================================================
+     * 5. CARREGA SOMENTE CONTEXTO ESSENCIAL
      *
-     * - histórico recente;
-     * - memória persistente;
-     * - serviços/preços/prazos.
+     * Histórico recente
+     * Memória persistente
+     * Índice mínimo dos serviços
+     *
+     * IMPORTANTE:
+     * preços, prazos e descrições NÃO são carregados aqui.
+     * =========================================================
      */
+
     const [
       recentMessagesResult,
       memoriesResult,
-      servicesResult,
+      serviceIndexResult,
     ] = await Promise.all([
       supabase
         .from("web_messages")
@@ -206,21 +216,11 @@ export async function POST(request: NextRequest) {
 
       supabase
         .from("services")
-        .select(`
-          slug,
-          name,
-          description,
-          price_min,
-          price_max,
-          delivery_min_days,
-          delivery_max_days,
-          notes
-        `)
+        .select("slug, name")
         .eq("active", true)
-        .order("price_min", {
+        .order("name", {
           ascending: true,
-        })
-        .limit(SERVICES_LIMIT),
+        }),
     ]);
 
     if (recentMessagesResult.error) {
@@ -231,157 +231,341 @@ export async function POST(request: NextRequest) {
       throw memoriesResult.error;
     }
 
-    if (servicesResult.error) {
-      throw servicesResult.error;
+    if (serviceIndexResult.error) {
+      throw serviceIndexResult.error;
     }
 
     /*
-     * 7. Histórico recente.
+     * =========================================================
+     * 6. HISTÓRICO RECENTE
+     * =========================================================
      */
-    const conversationHistory =
-      (recentMessagesResult.data || [])
-        .reverse()
-        .map((item) => ({
-          role:
-            item.role === "assistant"
-              ? ("assistant" as const)
-              : ("user" as const),
 
-          content: item.content,
-        }));
+    const recentMessages =
+      recentMessagesResult.data || [];
+
+    const conversationHistory = recentMessages
+      .slice()
+      .reverse()
+      .map((item) => ({
+        role:
+          item.role === "assistant"
+            ? ("assistant" as const)
+            : ("user" as const),
+
+        content: item.content,
+      }));
 
     /*
-     * 8. Memória persistente compacta.
+     * Versão textual para a etapa de interpretação.
      */
-    const persistentMemory =
-      (memoriesResult.data || [])
-        .map(
-          (memory) =>
-            `${memory.fact_key}: ${memory.fact_value}`
+    const conversationContext = conversationHistory
+      .map((item) => {
+        const speaker =
+          item.role === "assistant" ? "AGENTE" : "CLIENTE";
+
+        return `${speaker}: ${item.content}`;
+      })
+      .join("\n");
+
+    /*
+     * =========================================================
+     * 7. MEMÓRIA PERSISTENTE COMPACTA
+     * =========================================================
+     */
+
+    const persistentMemory = (
+      memoriesResult.data || []
+    )
+      .map(
+        (memory) =>
+          `${memory.fact_key}: ${memory.fact_value}`
+      )
+      .join("\n");
+
+    /*
+     * =========================================================
+     * 8. ÍNDICE MÍNIMO DE SERVIÇOS
+     *
+     * A etapa de interpretação conhece apenas:
+     * slug + nome.
+     *
+     * Ela NÃO recebe preço.
+     * =========================================================
+     */
+
+    const serviceIndex = (
+      serviceIndexResult.data || []
+    )
+      .map(
+        (service) =>
+          `${service.slug} | ${service.name}`
+      )
+      .join("\n");
+
+    /*
+     * =========================================================
+     * 9. DECISÃO INTELIGENTE DE RECUPERAÇÃO
+     *
+     * Essa chamada NÃO escreve a resposta ao cliente.
+     *
+     * Ela apenas interpreta a conversa:
+     *
+     * - a resposta atual realmente depende de preço?
+     * - se sim, qual serviço está sendo discutido?
+     *
+     * Não usamos lista de palavras-chave em TypeScript.
+     * O modelo interpreta semanticamente a conversa.
+     * =========================================================
+     */
+
+    const retrievalResponse =
+      await openai.responses.create({
+        model: "gpt-5.4-mini",
+
+        instructions: `
+Você atua apenas como analisador interno de contexto para um agente comercial.
+
+Sua função NÃO é responder ao cliente.
+
+Leia a conversa recente como um todo e determine se, para responder adequadamente à mensagem atual, é necessário consultar o preço oficial de um serviço.
+
+Entenda referências contextuais como:
+"esse projeto",
+"nesse caso",
+"e quanto ficaria?",
+"e isso?",
+"quanto sairia?",
+ou outras formas naturais de continuar a conversa.
+
+Não dependa de palavras específicas. Interprete intenção e contexto.
+
+Se a mensagem atual não depender de preço oficial, needs_pricing deve ser false.
+
+Se depender de preço:
+- use a conversa recente para identificar o projeto em discussão;
+- escolha o serviço mais compatível entre os serviços disponíveis;
+- retorne exatamente o slug cadastrado.
+
+Se o cliente estiver pedindo preço, mas o contexto ainda não permitir identificar com segurança o serviço, needs_pricing deve ser true e service_slug deve ser null.
+
+Não invente serviços.
+
+SERVIÇOS DISPONÍVEIS:
+
+${serviceIndex || "Nenhum serviço cadastrado."}
+        `.trim(),
+
+        input: `
+CONVERSA RECENTE:
+
+${conversationContext}
+
+MENSAGEM ATUAL:
+
+${message}
+        `.trim(),
+
+        max_output_tokens: 150,
+
+        text: {
+          format: {
+            type: "json_schema",
+
+            name: "pricing_retrieval_decision",
+
+            strict: true,
+
+            schema: {
+              type: "object",
+
+              properties: {
+                needs_pricing: {
+                  type: "boolean",
+                },
+
+                service_slug: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                },
+
+                reasoning_summary: {
+                  type: "string",
+                },
+              },
+
+              required: [
+                "needs_pricing",
+                "service_slug",
+                "reasoning_summary",
+              ],
+
+              additionalProperties: false,
+            },
+          },
+        },
+      });
+
+    if (!retrievalResponse.output_text) {
+      throw new Error(
+        "A etapa de recuperação não retornou conteúdo."
+      );
+    }
+
+    const retrievalDecision = JSON.parse(
+      retrievalResponse.output_text
+    ) as RetrievalDecision;
+
+    /*
+     * =========================================================
+     * 10. RECUPERAÇÃO SELETIVA
+     *
+     * Só consultamos preço se a conversa realmente precisar.
+     * =========================================================
+     */
+
+    let officialCommercialContext = "";
+
+    if (
+      retrievalDecision.needs_pricing &&
+      retrievalDecision.service_slug
+    ) {
+      const {
+        data: service,
+        error: serviceError,
+      } = await supabase
+        .from("services")
+        .select(`
+          slug,
+          name,
+          description,
+          price_min,
+          price_max,
+          delivery_min_days,
+          delivery_max_days,
+          notes
+        `)
+        .eq(
+          "slug",
+          retrievalDecision.service_slug
         )
-        .join("\n");
+        .eq("active", true)
+        .maybeSingle();
+
+      if (serviceError) {
+        throw serviceError;
+      }
+
+      if (service) {
+        const price =
+          service.price_min !== null &&
+          service.price_max !== null
+            ? `R$ ${Number(
+                service.price_min
+              ).toLocaleString(
+                "pt-BR"
+              )} a R$ ${Number(
+                service.price_max
+              ).toLocaleString("pt-BR")}`
+            : "Não há faixa oficial cadastrada.";
+
+        officialCommercialContext = `
+DADOS OFICIAIS RECUPERADOS DO NEGÓCIO
+
+Serviço identificado: ${service.name}
+Faixa inicial de referência: ${price}
+
+Descrição:
+${service.description || "Não cadastrada."}
+
+Observações:
+${service.notes || "Nenhuma observação adicional."}
+
+Esses dados são a fonte oficial para esta resposta.
+        `.trim();
+      }
+    }
 
     /*
-     * 9. Serviços comerciais.
+     * Se existe intenção de preço, mas ainda não conseguimos
+     * identificar o serviço, informamos isso ao modelo.
+     *
+     * Ele decide naturalmente se precisa perguntar algo.
      */
-    const commercialServices =
-      (servicesResult.data || [])
-        .map((service) => {
-          const price =
-            service.price_min !== null &&
-            service.price_max !== null
-              ? `R$ ${Number(
-                  service.price_min
-                ).toLocaleString("pt-BR")} a R$ ${Number(
-                  service.price_max
-                ).toLocaleString("pt-BR")}`
-              : "sob consulta";
+    if (
+      retrievalDecision.needs_pricing &&
+      !officialCommercialContext
+    ) {
+      officialCommercialContext = `
+A conversa indica que o cliente deseja informação de preço, mas ainda não há informação suficiente para identificar com segurança qual serviço oficial deve ser usado como referência.
 
-          const delivery =
-            service.delivery_min_days !== null &&
-            service.delivery_max_days !== null
-              ? `${service.delivery_min_days} a ${service.delivery_max_days} dias`
-              : "sob consulta";
+Não invente um valor.
 
-          return [
-            `SERVIÇO: ${service.name}`,
-            `Descrição: ${service.description || "-"}`,
-            `Faixa de preço: ${price}`,
-            `Prazo típico: ${delivery}`,
-            service.notes
-              ? `Observação: ${service.notes}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join("\n");
-        })
-        .join("\n\n");
+Use o contexto da conversa e, somente se realmente necessário, peça uma informação curta que permita entender melhor o projeto.
+      `.trim();
+    }
 
     /*
-     * 10. Uma única chamada à OpenAI.
+     * =========================================================
+     * 11. CHAMADA PRINCIPAL
+     *
+     * Este é o agente que conversa de verdade.
+     *
+     * Prompt permanente propositalmente curto.
+     * =========================================================
      */
-    const aiResponse = await openai.responses.create({
-      model: "gpt-5.4-mini",
 
-      instructions: `
-Você é o assistente comercial virtual do @walbrasil.dev.
+    const aiResponse =
+      await openai.responses.create({
+        model: "gpt-5.4-mini",
 
-Você atende visitantes diretamente pelo site walbrasil.dev.
+        instructions: `
+Você é o agente de IA do @walbrasil.dev.
 
-Seu objetivo é compreender o que a pessoa deseja criar, explicar os serviços disponíveis e ajudar o potencial cliente a avançar naturalmente na conversa.
+Converse em português brasileiro de forma natural, inteligente, profissional e humana.
 
-Você representa uma marca profissional de desenvolvimento web, automações e soluções com inteligência artificial.
+Entenda primeiro o que o cliente quer e use o contexto da conversa.
 
-Não se apresente como uma grande agência ou equipe.
+Não aja como menu de atendimento, formulário ou árvore de decisão.
 
-=========================
-MEMÓRIA DO VISITANTE
-=========================
+Você pode conversar livremente, explicar possibilidades, discutir ideias, sugerir soluções e fazer perguntas quando elas realmente ajudarem.
 
-Use estes fatos quando forem relevantes:
+Não faça perguntas apenas para cumprir um roteiro.
 
-${persistentMemory || "Nenhuma memória persistente ainda."}
+Não repita informações que o cliente já forneceu.
 
-Não diga ao visitante que existe um banco de dados ou sistema de memória.
+Quando receber dados oficiais do negócio, trate-os como fonte de verdade.
 
-=========================
-SERVIÇOS DO @WALBRASIL.DEV
-=========================
+Não invente preços, políticas, prazos ou outras informações comerciais que não tenham sido fornecidas oficialmente.
 
-${commercialServices || "Nenhum serviço comercial cadastrado."}
+Adapte a resposta ao estágio e ao tom da conversa.
 
-=========================
-REGRAS COMERCIAIS
-=========================
+Prefira respostas adequadas para um chat de site: claras e naturais, sem serem artificialmente curtas.
 
-Quando o visitante perguntar se determinado serviço é realizado, use a base comercial acima.
+MEMÓRIA ÚTIL DO VISITANTE:
 
-Quando perguntar preço:
+${persistentMemory || "Nenhuma memória persistente relevante."}
 
-- use somente as faixas cadastradas;
-- não invente valores;
-- informe que são valores iniciais de referência;
-- explique brevemente que o preço final depende do escopo;
-- não fuja da pergunta quando existir um serviço correspondente.
+${
+  officialCommercialContext
+    ? `CONTEXTO OFICIAL PARA ESTA RESPOSTA:
 
-Quando perguntar prazo:
+${officialCommercialContext}`
+    : ""
+}
 
-- use o prazo típico cadastrado;
-- explique que é uma estimativa inicial;
-- o prazo final depende do escopo.
+Além da resposta, identifique somente fatos novos, úteis e explicitamente informados pelo cliente na mensagem atual que possam ajudar em conversas futuras.
 
-Se o projeto combinar vários serviços, não some valores mecanicamente.
+Não transforme cada frase em memória.
 
-Nesse caso, explique que o conjunto precisa ser analisado para uma proposta adequada.
-
-Se algo não estiver na base comercial, não invente preço.
-
-=========================
-ESTILO DA CONVERSA
-=========================
-
-- Português brasileiro.
-- Tom profissional, próximo e natural.
-- Respostas curtas.
-- Normalmente 1 ou 2 parágrafos.
-- Não faça interrogatório.
-- Faça no máximo uma pergunta relevante por resposta quando precisar entender melhor o projeto.
-- Não repita perguntas já respondidas.
-- Evite saudações repetidas.
-- Não pressione o visitante.
-- Não invente informações sobre o @walbrasil.dev.
-- Responda diretamente quando puder.
-
-=========================
-MEMÓRIA DE LONGO PRAZO
-=========================
-
-Além da resposta, identifique apenas fatos NOVOS e úteis explicitamente informados pelo visitante na mensagem atual.
-
-Exemplos de fact_key:
-
+Exemplos úteis:
 nome
-idade
 empresa
 cidade
 tipo_projeto
@@ -389,147 +573,149 @@ servico_interesse
 orcamento
 prazo
 objetivo
+funcionalidades
 preferencia_visual
 preferencia_contato
-cargo
 segmento_empresa
 
-Use fact_key curto, em português e snake_case.
+Use fact_key curto em português e snake_case.
 
-Não salve frases triviais.
+Não armazene inferências como fatos.
 
-Não transforme inferências em fatos.
+Se o cliente corrigir informação anterior, reutilize a mesma fact_key.
 
-Não salve informações apenas porque apareceram no histórico.
+Não armazene senhas, tokens, credenciais, dados bancários, documentos ou informações pessoais sensíveis.
 
-Se o visitante corrigir uma informação anterior, use novamente a mesma fact_key com o novo valor.
+Se não houver fato novo útil, memory_updates deve ser [].
 
-Não salve:
-- senhas;
-- tokens;
-- credenciais;
-- dados bancários;
-- documentos;
-- informações pessoais sensíveis.
+Use confidence 1.0 quando o fato tiver sido declarado explicitamente.
+        `.trim(),
 
-Se não houver fato novo útil:
-memory_updates deve ser [].
+        input: conversationHistory,
 
-Use confidence 1.0 para fatos explicitamente declarados.
-      `.trim(),
+        max_output_tokens: 500,
 
-      input: conversationHistory,
+        text: {
+          format: {
+            type: "json_schema",
 
-      max_output_tokens: 320,
+            name: "walbrasil_web_agent_response",
 
-      text: {
-        format: {
-          type: "json_schema",
+            strict: true,
 
-          name: "walbrasil_web_agent_response",
+            schema: {
+              type: "object",
 
-          strict: true,
+              properties: {
+                reply: {
+                  type: "string",
+                },
 
-          schema: {
-            type: "object",
+                memory_updates: {
+                  type: "array",
 
-            properties: {
-              reply: {
-                type: "string",
-              },
+                  items: {
+                    type: "object",
 
-              memory_updates: {
-                type: "array",
+                    properties: {
+                      fact_key: {
+                        type: "string",
+                      },
 
-                items: {
-                  type: "object",
+                      fact_value: {
+                        type: "string",
+                      },
 
-                  properties: {
-                    fact_key: {
-                      type: "string",
+                      confidence: {
+                        type: "number",
+                        minimum: 0,
+                        maximum: 1,
+                      },
                     },
 
-                    fact_value: {
-                      type: "string",
-                    },
+                    required: [
+                      "fact_key",
+                      "fact_value",
+                      "confidence",
+                    ],
 
-                    confidence: {
-                      type: "number",
-                      minimum: 0,
-                      maximum: 1,
-                    },
+                    additionalProperties: false,
                   },
-
-                  required: [
-                    "fact_key",
-                    "fact_value",
-                    "confidence",
-                  ],
-
-                  additionalProperties: false,
                 },
               },
+
+              required: [
+                "reply",
+                "memory_updates",
+              ],
+
+              additionalProperties: false,
             },
-
-            required: [
-              "reply",
-              "memory_updates",
-            ],
-
-            additionalProperties: false,
           },
         },
-      },
-    });
+      });
 
     /*
-     * 11. Processa resposta.
+     * =========================================================
+     * 12. PROCESSA RESPOSTA
+     * =========================================================
      */
-    const rawOutput = aiResponse.output_text;
+
+    const rawOutput =
+      aiResponse.output_text;
 
     if (!rawOutput) {
-      throw new Error("OpenAI não retornou conteúdo.");
+      throw new Error(
+        "OpenAI não retornou conteúdo."
+      );
     }
 
-    const agentResult = JSON.parse(
-      rawOutput
-    ) as AgentResult;
+    const agentResult =
+      JSON.parse(rawOutput) as AgentResult;
 
-    const aiText = agentResult.reply?.trim();
+    const aiText =
+      agentResult.reply?.trim();
 
     if (!aiText) {
-      throw new Error("Resposta da IA vazia.");
+      throw new Error(
+        "Resposta da IA vazia."
+      );
     }
 
     /*
-     * 12. Filtra fatos úteis.
+     * =========================================================
+     * 13. MEMÓRIA PERSISTENTE
+     * =========================================================
      */
-    const memoryUpdates =
-      (agentResult.memory_updates || [])
-        .filter(
-          (memory) =>
-            memory.fact_key &&
-            memory.fact_value &&
-            memory.confidence >= 0.7
-        )
-        .slice(0, 5);
 
-    /*
-     * 13. Prepara operações do banco.
-     */
+    const memoryUpdates = (
+      agentResult.memory_updates || []
+    )
+      .filter(
+        (memory) =>
+          memory.fact_key &&
+          memory.fact_value &&
+          memory.confidence >= 0.7
+      )
+      .slice(0, 5);
+
     const now = new Date().toISOString();
 
-    const databaseOperations: PromiseLike<unknown>[] = [];
+    const databaseOperations: PromiseLike<unknown>[] =
+      [];
 
     /*
-     * Salva resposta do agente.
+     * Salva resposta.
      */
     databaseOperations.push(
       supabase
         .from("web_messages")
         .insert({
-          conversation_id: conversation.id,
+          conversation_id:
+            conversation.id,
+
           role: "assistant",
+
           content: aiText,
         })
         .then((result) => {
@@ -542,7 +728,7 @@ Use confidence 1.0 para fatos explicitamente declarados.
     );
 
     /*
-     * Atualiza horário da conversa.
+     * Atualiza conversa.
      */
     databaseOperations.push(
       supabase
@@ -561,35 +747,40 @@ Use confidence 1.0 para fatos explicitamente declarados.
     );
 
     /*
-     * Atualiza memória.
+     * Atualiza fatos persistentes.
      */
     if (memoryUpdates.length > 0) {
-      const memoryRows = memoryUpdates.map(
-        (memory) => ({
-          visitor_id: visitor.id,
+      const memoryRows =
+        memoryUpdates.map(
+          (memory) => ({
+            visitor_id: visitor.id,
 
-          fact_key: memory.fact_key
-            .trim()
-            .toLowerCase()
-            .replace(
-              /[^a-z0-9_à-ÿ]/gi,
-              "_"
-            )
-            .replace(/_+/g, "_"),
+            fact_key: memory.fact_key
+              .trim()
+              .toLowerCase()
+              .replace(
+                /[^a-z0-9_à-ÿ]/gi,
+                "_"
+              )
+              .replace(/_+/g, "_")
+              .replace(/^_+|_+$/g, ""),
 
-          fact_value: memory.fact_value.trim(),
+            fact_value:
+              memory.fact_value.trim(),
 
-          confidence: memory.confidence,
+            confidence:
+              memory.confidence,
 
-          source: "web_chat",
-        })
-      );
+            source: "web_chat",
+          })
+        );
 
       databaseOperations.push(
         supabase
           .from("web_memory")
           .upsert(memoryRows, {
-            onConflict: "visitor_id,fact_key",
+            onConflict:
+              "visitor_id,fact_key",
           })
           .then((result) => {
             if (result.error) {
@@ -601,35 +792,89 @@ Use confidence 1.0 para fatos explicitamente declarados.
       );
     }
 
-    await Promise.all(databaseOperations);
+    await Promise.all(
+      databaseOperations
+    );
 
-    console.log("=== WEB AGENT @WALBRASIL.DEV ===");
-    console.log("Visitor:", visitor.id);
-    console.log("Histórico:", conversationHistory.length);
+    /*
+     * =========================================================
+     * 14. LOGS DE DESENVOLVIMENTO
+     *
+     * Isso vai nos permitir conferir se a recuperação
+     * contextual está funcionando como planejado.
+     * =========================================================
+     */
+
+    console.log(
+      "=== AGENTE WEB @WALBRASIL.DEV ==="
+    );
+
+    console.log(
+      "Visitor:",
+      visitor.id
+    );
+
+    console.log(
+      "Histórico carregado:",
+      conversationHistory.length
+    );
+
     console.log(
       "Memórias carregadas:",
       memoriesResult.data?.length || 0
     );
+
+    console.log(
+      "Precisa consultar preço:",
+      retrievalDecision.needs_pricing
+    );
+
+    console.log(
+      "Serviço identificado:",
+      retrievalDecision.service_slug
+    );
+
+    console.log(
+      "Resumo da decisão:",
+      retrievalDecision.reasoning_summary
+    );
+
+    console.log(
+      "Preço recuperado:",
+      Boolean(officialCommercialContext)
+    );
+
     console.log(
       "Memórias atualizadas:",
       memoryUpdates.length
     );
+
     console.log(
-      "Serviços carregados:",
-      servicesResult.data?.length || 0
+      "Tokens etapa recuperação:",
+      retrievalResponse.usage
     );
-    console.log("Tokens:", aiResponse.usage);
-    console.log("===============================");
+
+    console.log(
+      "Tokens resposta principal:",
+      aiResponse.usage
+    );
+
+    console.log(
+      "================================"
+    );
 
     /*
-     * O visitorToken volta para o navegador,
-     * que depois guardará em localStorage.
+     * =========================================================
+     * 15. RESPOSTA PARA O SITE
+     * =========================================================
      */
+
     return NextResponse.json({
       status: "ok",
       reply: aiText,
       visitorToken,
-      memoriesUpdated: memoryUpdates.length,
+      memoriesUpdated:
+        memoryUpdates.length,
     });
   } catch (error) {
     console.error(
