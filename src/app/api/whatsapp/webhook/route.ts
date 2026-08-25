@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const GRAPH_API_VERSION = "v26.0";
+const HISTORY_LIMIT = 10;
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -43,8 +44,14 @@ export async function POST(request: NextRequest) {
     const message = value?.messages?.[0];
     const contact = value?.contacts?.[0];
 
+    /*
+     * Eventos de status, entrega, leitura etc.
+     * NÃO geram resposta.
+     */
     if (!message) {
-      return NextResponse.json({ status: "ok" });
+      return NextResponse.json({
+        status: "event_ignored",
+      });
     }
 
     const from = message.from;
@@ -59,8 +66,19 @@ export async function POST(request: NextRequest) {
     const name =
       contact?.profile?.name || "Sem nome";
 
-    if (type !== "text" || !text) {
-      return NextResponse.json({ status: "ok" });
+    /*
+     * Nesta fase respondemos SOMENTE texto recebido
+     * de um usuário.
+     */
+    if (
+      !from ||
+      !whatsappMessageId ||
+      type !== "text" ||
+      !text
+    ) {
+      return NextResponse.json({
+        status: "message_ignored",
+      });
     }
 
     const accessToken =
@@ -87,83 +105,30 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 1. Verifica se essa mensagem já foi processada.
-     * A Meta pode reenviar webhooks.
+     * 1. Localiza ou cria o contato.
      */
-    if (whatsappMessageId) {
-      const { data: existingMessage } =
-        await supabase
-          .from("messages")
-          .select("id")
-          .eq("whatsapp_message_id", whatsappMessageId)
-          .maybeSingle();
-
-      if (existingMessage) {
-        console.log(
-          "Mensagem duplicada ignorada:",
-          whatsappMessageId
-        );
-
-        return NextResponse.json({
-          status: "duplicate_ignored",
-        });
-      }
-    }
-
-    /*
-     * 2. Localiza ou cria o contato.
-     */
-    let { data: contactRecord, error: contactError } =
+    const { data: contactRecord, error: contactError } =
       await supabase
         .from("contacts")
-        .select("*")
-        .eq("phone", from)
-        .maybeSingle();
-
-    if (contactError) {
-      throw contactError;
-    }
-
-    if (!contactRecord) {
-      const { data, error } =
-        await supabase
-          .from("contacts")
-          .insert({
+        .upsert(
+          {
             phone: from,
             name,
-          })
-          .select()
-          .single();
+          },
+          {
+            onConflict: "phone",
+          }
+        )
+        .select()
+        .single();
 
-      if (error) {
-        throw error;
-      }
-
-      contactRecord = data;
-    } else if (
-      name &&
-      name !== "Sem nome" &&
-      contactRecord.name !== name
-    ) {
-      const { data, error } =
-        await supabase
-          .from("contacts")
-          .update({
-            name,
-          })
-          .eq("id", contactRecord.id)
-          .select()
-          .single();
-
-      if (error) {
-        throw error;
-      }
-
-      contactRecord = data;
+    if (contactError || !contactRecord) {
+      throw contactError ||
+        new Error("Contato não encontrado.");
     }
 
     /*
-     * 3. Localiza ou cria uma conversa ativa.
+     * 2. Localiza conversa ativa.
      */
     let { data: conversation, error: conversationError } =
       await supabase
@@ -181,6 +146,9 @@ export async function POST(request: NextRequest) {
       throw conversationError;
     }
 
+    /*
+     * 3. Cria conversa caso ainda não exista.
+     */
     if (!conversation) {
       const { data, error } =
         await supabase
@@ -200,7 +168,12 @@ export async function POST(request: NextRequest) {
     }
 
     /*
-     * 4. Salva a mensagem do usuário.
+     * 4. TRAVA PRINCIPAL CONTRA REPETIÇÕES.
+     *
+     * whatsapp_message_id possui índice UNIQUE.
+     * Se a Meta reenviar a mesma mensagem,
+     * o banco rejeita e nós NÃO chamamos a OpenAI
+     * novamente e NÃO respondemos novamente.
      */
     const { error: userMessageError } =
       await supabase
@@ -213,30 +186,30 @@ export async function POST(request: NextRequest) {
         });
 
     if (userMessageError) {
+      /*
+       * PostgreSQL 23505 = violação de UNIQUE.
+       */
+      if (userMessageError.code === "23505") {
+        console.log(
+          "Webhook repetido ignorado:",
+          whatsappMessageId
+        );
+
+        return NextResponse.json({
+          status: "duplicate_ignored",
+        });
+      }
+
       throw userMessageError;
     }
 
     /*
-     * 5. Atualiza a última interação da conversa.
-     */
-    const { error: updateConversationError } =
-      await supabase
-        .from("conversations")
-        .update({
-          last_message_at: new Date().toISOString(),
-        })
-        .eq("id", conversation.id);
-
-    if (updateConversationError) {
-      throw updateConversationError;
-    }
-
-    /*
-     * 6. Busca as últimas 20 mensagens.
+     * 5. Busca apenas as últimas 10 mensagens.
      *
-     * O banco retorna da mais recente para a mais antiga.
-     * Depois fazemos reverse() para enviar à IA
-     * na ordem natural da conversa.
+     * Menos contexto =
+     * menos tokens +
+     * menor custo +
+     * menor latência.
      */
     const { data: recentMessages, error: messagesError } =
       await supabase
@@ -246,7 +219,7 @@ export async function POST(request: NextRequest) {
         .order("created_at", {
           ascending: false,
         })
-        .limit(20);
+        .limit(HISTORY_LIMIT);
 
     if (messagesError) {
       throw messagesError;
@@ -264,65 +237,88 @@ export async function POST(request: NextRequest) {
         }));
 
     /*
-     * 7. Envia o histórico para a OpenAI.
+     * 6. OpenAI.
+     *
+     * Modelo menor para priorizar:
+     * - velocidade
+     * - custo
+     * - conversa comercial cotidiana
      */
     const aiResponse =
       await openai.responses.create({
-        model: "gpt-5.6",
+        model: "gpt-5.4-mini",
 
         instructions: `
 Você é o assistente virtual da Wal Brasil.
 
-Converse de forma natural, clara, inteligente e profissional em português brasileiro.
+Converse naturalmente em português brasileiro.
 
-Você está conversando pelo WhatsApp, então prefira respostas naturais e objetivas, sem textos excessivamente longos.
+Você atende pelo WhatsApp.
 
-Use o histórico fornecido para manter continuidade real da conversa.
+REGRAS IMPORTANTES:
 
-Não repita perguntas que o cliente já respondeu.
-
-Não invente preços, prazos, produtos, serviços ou informações específicas da Wal Brasil que ainda não estejam disponíveis no contexto.
-
-Se não souber alguma informação específica da empresa, diga isso naturalmente.
-
-Seu objetivo neste estágio é conversar bem, compreender o contexto e manter uma interação natural.
+- Responda apenas à mensagem atual do usuário.
+- Nunca envie follow-up por iniciativa própria.
+- Nunca cobre uma resposta.
+- Nunca insista para o usuário continuar conversando.
+- Nunca repita uma pergunta já respondida.
+- Use o histórico apenas para manter continuidade.
+- Prefira respostas curtas, naturais e úteis.
+- Normalmente responda em 1 ou 2 parágrafos curtos.
+- Só dê respostas longas quando o usuário pedir detalhes.
+- Não invente preços, prazos, produtos, serviços ou condições da Wal Brasil.
+- Se não souber uma informação específica da empresa, diga isso naturalmente.
+- Evite saudações repetidas quando a conversa já estiver em andamento.
+- Não transforme toda resposta em pergunta.
+- Se a mensagem puder ser respondida diretamente, responda e encerre naturalmente.
         `.trim(),
 
         input: conversationHistory,
+
+        max_output_tokens: 220,
       });
 
     const aiText =
       aiResponse.output_text?.trim() ||
-      "Desculpe, não consegui formular uma resposta agora.";
+      "Desculpe, não consegui responder agora.";
 
     /*
-     * 8. Salva a resposta da IA.
+     * 7. Salva resposta e atualiza conversa
+     * simultaneamente.
      */
-    const { error: assistantMessageError } =
-      await supabase
+    const now =
+      new Date().toISOString();
+
+    const [
+      assistantInsert,
+      conversationUpdate,
+    ] = await Promise.all([
+      supabase
         .from("messages")
         .insert({
           conversation_id: conversation.id,
           role: "assistant",
           content: aiText,
-        });
+        }),
 
-    if (assistantMessageError) {
-      throw assistantMessageError;
+      supabase
+        .from("conversations")
+        .update({
+          last_message_at: now,
+        })
+        .eq("id", conversation.id),
+    ]);
+
+    if (assistantInsert.error) {
+      throw assistantInsert.error;
+    }
+
+    if (conversationUpdate.error) {
+      throw conversationUpdate.error;
     }
 
     /*
-     * 9. Atualiza novamente a conversa.
-     */
-    await supabase
-      .from("conversations")
-      .update({
-        last_message_at: new Date().toISOString(),
-      })
-      .eq("id", conversation.id);
-
-    /*
-     * 10. Envia a resposta pelo WhatsApp.
+     * 8. Envia UMA resposta pelo WhatsApp.
      */
     const whatsappResponse =
       await fetch(
@@ -342,43 +338,44 @@ Seu objetivo neste estágio é conversar bem, compreender o contexto e manter um
             type: "text",
 
             text: {
+              preview_url: false,
               body: aiText,
             },
           }),
         }
       );
 
-    const whatsappResponseData =
+    const whatsappData =
       await whatsappResponse.json();
 
     if (!whatsappResponse.ok) {
       console.error(
-        "Erro ao enviar resposta pelo WhatsApp:",
-        whatsappResponseData
+        "Erro ao enviar WhatsApp:",
+        whatsappData
       );
 
-      return NextResponse.json(
-        {
-          status: "whatsapp_send_error",
-          details: whatsappResponseData,
-        },
-        { status: 500 }
-      );
+      /*
+       * Importante:
+       *
+       * Retornamos 200 mesmo se a resposta de saída
+       * falhar, porque a mensagem de entrada JÁ foi
+       * processada.
+       *
+       * Isso evita que a Meta fique reenviando o
+       * mesmo webhook e provocando novas respostas.
+       */
+      return NextResponse.json({
+        status: "processed_but_send_failed",
+      });
     }
 
-    console.log("=== MEMÓRIA ATUALIZADA ===");
-    console.log("Contato:", contactRecord.id);
-    console.log("Conversa:", conversation.id);
     console.log(
-      "Mensagens no contexto:",
-      conversationHistory.length
+      `Respondido ${from} | contexto: ${conversationHistory.length} mensagens`
     );
-    console.log("==========================");
 
     return NextResponse.json({
       status: "ok",
       replySent: true,
-      conversationId: conversation.id,
     });
   } catch (error) {
     console.error(
