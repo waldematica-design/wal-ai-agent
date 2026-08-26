@@ -117,7 +117,7 @@ export default function TesteAgenteWaldematicaPage() {
       <Script
         src="/waldematica-ai-widget.js"
         strategy="afterInteractive"
-        data-api-url="http://localhost:3000/api/waldematica/chat"
+        data-api-url="/api/waldematica/chat"
         data-title="Agente IA Waldemática"
         data-subtitle="Online"
         data-button-label="Fale com nossa IA"
