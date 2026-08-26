@@ -148,8 +148,8 @@ export async function POST(request: NextRequest) {
      * =========================================================
      */
 
-    let {
-      data: visitor,
+    const {
+      data: visitorData,
       error: visitorLookupError,
     } = await supabase
       .from("web_visitors")
@@ -163,6 +163,8 @@ export async function POST(request: NextRequest) {
     if (visitorLookupError) {
       throw visitorLookupError;
     }
+
+    let visitor = visitorData;
 
     if (!visitor) {
       const {
@@ -190,8 +192,8 @@ export async function POST(request: NextRequest) {
      * =========================================================
      */
 
-    let {
-      data: conversation,
+    const {
+      data: conversationData,
       error: conversationLookupError,
     } = await supabase
       .from("web_conversations")
@@ -218,6 +220,8 @@ export async function POST(request: NextRequest) {
     ) {
       throw conversationLookupError;
     }
+
+    let conversation = conversationData;
 
     if (!conversation) {
       const {

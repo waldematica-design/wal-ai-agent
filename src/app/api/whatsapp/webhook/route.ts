@@ -177,8 +177,8 @@ export async function POST(request: NextRequest) {
     /*
      * 2. Localiza conversa ativa.
      */
-    let {
-      data: conversation,
+    const {
+      data: conversationData,
       error: conversationError,
     } =
       await supabase
@@ -197,6 +197,8 @@ export async function POST(request: NextRequest) {
         )
         .limit(1)
         .maybeSingle();
+
+    let conversation = conversationData;
 
     if (conversationError) {
       throw conversationError;
