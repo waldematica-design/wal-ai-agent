@@ -9,6 +9,10 @@
 
   const script = document.currentScript;
 
+  const scriptBaseUrl = script?.src
+    ? new URL(".", script.src).href
+    : "https://wal-ai-agent.vercel.app/";
+
   const CONFIG = {
     apiUrl:
       script?.dataset.apiUrl ||
@@ -746,7 +750,9 @@
         "img",
         "wm-ai-logo",
         {
-          src: "/waldematica-ai-logo.png",
+          src:
+            script?.dataset.logoUrl ||
+            `${scriptBaseUrl}waldematica-ai-logo.png`,
           alt: "Waldemática",
           draggable: "false",
         }
