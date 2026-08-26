@@ -38,6 +38,8 @@ type LeadUpdate = {
   should_update: boolean;
   name: string | null;
   company_name: string | null;
+  email: string | null;
+  phone: string | null;
   project_type: string | null;
   main_goal: string | null;
   requested_features: string | null;
@@ -411,13 +413,12 @@ export async function POST(request: NextRequest) {
      * =========================================================
      * PRIMEIRA CHAMADA
      *
-     * Ela já conversa normalmente.
-     *
-     * Também identifica silenciosamente:
-     * - necessidade de preço;
-     * - necessidade de contato;
-     * - fatos de memória;
-     * - atualização estruturada do lead.
+     * Ela:
+     * - conversa normalmente;
+     * - identifica necessidade de preço;
+     * - identifica necessidade de contato;
+     * - atualiza memória;
+     * - qualifica lead silenciosamente.
      * =========================================================
      */
 
@@ -514,10 +515,22 @@ Quando houver atualização útil, preencha somente os campos que realmente pode
 Campos:
 
 name:
-nome do cliente, se ele informar.
+nome do cliente, se ele informar explicitamente.
 
 company_name:
 empresa, negócio, clínica, loja, academia, escritório ou organização informada.
+
+email:
+e-mail informado explicitamente pelo cliente.
+
+phone:
+telefone ou WhatsApp informado explicitamente pelo cliente.
+
+Não invente nem deduza e-mail ou telefone.
+
+Não transforme a conversa em formulário apenas para coletar contato.
+
+Quando o atendimento estiver naturalmente avançando para proposta, negociação ou fechamento e ainda não houver nenhum meio de contato do cliente, você pode pedir de forma natural o melhor WhatsApp ou e-mail para continuidade.
 
 project_type:
 tipo geral de projeto que está sendo discutido.
@@ -564,14 +577,15 @@ use apenas quando houver contexto claro de encerramento comercial.
 
 Não force mudança de estágio em toda mensagem.
 
-Se nenhuma mudança fizer sentido, stage = null.
+Se nenhuma mudança fizer sentido:
+stage = null.
         `.trim(),
 
         input:
           conversationHistory,
 
         max_output_tokens:
-          650,
+          700,
 
         text: {
           format: {
@@ -657,6 +671,32 @@ Se nenhuma mudança fizer sentido, stage = null.
                     },
 
                     company_name: {
+                      anyOf: [
+                        {
+                          type:
+                            "string",
+                        },
+                        {
+                          type:
+                            "null",
+                        },
+                      ],
+                    },
+
+                    email: {
+                      anyOf: [
+                        {
+                          type:
+                            "string",
+                        },
+                        {
+                          type:
+                            "null",
+                        },
+                      ],
+                    },
+
+                    phone: {
                       anyOf: [
                         {
                           type:
@@ -788,6 +828,8 @@ Se nenhuma mudança fizer sentido, stage = null.
                     "should_update",
                     "name",
                     "company_name",
+                    "email",
+                    "phone",
                     "project_type",
                     "main_goal",
                     "requested_features",
@@ -885,8 +927,6 @@ Se nenhuma mudança fizer sentido, stage = null.
     /*
      * =========================================================
      * RECUPERAÇÃO OFICIAL
-     *
-     * Só acontece quando necessário.
      * =========================================================
      */
 
@@ -1096,8 +1136,6 @@ Não invente telefone ou link.
       /*
        * =========================================================
        * SEGUNDA CHAMADA
-       *
-       * Somente se precisou buscar dado oficial.
        * =========================================================
        */
 
@@ -1400,6 +1438,20 @@ ${officialContext}
       }
 
       if (
+        leadUpdate.email
+      ) {
+        leadRow.email =
+          leadUpdate.email.trim();
+      }
+
+      if (
+        leadUpdate.phone
+      ) {
+        leadRow.phone =
+          leadUpdate.phone.trim();
+      }
+
+      if (
         leadUpdate.project_type
       ) {
         leadRow.project_type =
@@ -1449,8 +1501,8 @@ ${officialContext}
       }
 
       /*
-       * Se o cliente pediu contato humano,
-       * isso é um handoff real.
+       * Pedido explícito de atendimento humano
+       * tem prioridade.
        */
       if (
         firstResult
@@ -1533,6 +1585,20 @@ ${officialContext}
     console.log(
       "Lead atualizado:",
       leadUpdate.should_update
+    );
+
+    console.log(
+      "E-mail capturado:",
+      leadUpdate.email
+        ? "sim"
+        : "não"
+    );
+
+    console.log(
+      "Telefone capturado:",
+      leadUpdate.phone
+        ? "sim"
+        : "não"
     );
 
     console.log(
