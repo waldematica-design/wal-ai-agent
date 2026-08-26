@@ -19,6 +19,7 @@ const supabase = createClient(
 const ALLOWED_ORIGINS = new Set([
   "https://waldematica.com.br",
   "https://www.waldematica.com.br",
+  "https://wal-ai-agent.vercel.app",
   "http://localhost:3000",
 ]);
 
