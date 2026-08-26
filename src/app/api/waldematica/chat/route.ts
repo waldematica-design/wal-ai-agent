@@ -45,9 +45,7 @@ function jsonResponse(
   body: unknown,
   init: ResponseInit = {}
 ) {
-  return jsonResponse(
-        request,
-body, {
+  return NextResponse.json(body, {
     ...init,
     headers: {
       ...getCorsHeaders(request),
