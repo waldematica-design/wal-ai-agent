@@ -483,6 +483,10 @@
           padding: 0 15px;
         }
 
+        .wm-ai-panel.wm-ai-open + .wm-ai-launcher {
+          display: none;
+        }
+
         .wm-ai-panel {
           inset: 0;
           width: 100vw;
