@@ -1,15 +1,11 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import {
-  useRouter,
-  useSearchParams,
-} from "next/navigation";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AdminLoginPage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const supabase = createClient();
 
   const [email, setEmail] = useState("");
@@ -17,7 +13,9 @@ export default function AdminLoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+  async function handleLogin(
+    event: FormEvent<HTMLFormElement>
+  ) {
     event.preventDefault();
 
     setError("");
@@ -36,7 +34,12 @@ export default function AdminLoginPage() {
       return;
     }
 
-    const nextPath = searchParams.get("next");
+    const searchParams = new URLSearchParams(
+      window.location.search
+    );
+
+    const nextPath =
+      searchParams.get("next");
 
     const safeNextPath =
       nextPath &&
@@ -54,15 +57,15 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <p className="text-sm font-medium text-blue-400">
-            @walbrasil.dev
+            Administração
           </p>
 
           <h1 className="mt-2 text-3xl font-bold">
-            Administração
+            Painel dos Agentes de IA
           </h1>
 
           <p className="mt-2 text-sm text-slate-400">
-            Acesso restrito aos painéis dos Agentes de IA.
+            Acesso restrito aos painéis administrativos.
           </p>
         </div>
 
@@ -84,7 +87,9 @@ export default function AdminLoginPage() {
               autoComplete="email"
               required
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) =>
+                setEmail(event.target.value)
+              }
               className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-blue-500"
               placeholder="seu@email.com"
             />
@@ -104,7 +109,9 @@ export default function AdminLoginPage() {
               autoComplete="current-password"
               required
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) =>
+                setPassword(event.target.value)
+              }
               className="mt-2 w-full rounded-xl border border-white/10 bg-slate-950 px-4 py-3 text-white outline-none transition focus:border-blue-500"
               placeholder="Sua senha"
             />
@@ -121,7 +128,9 @@ export default function AdminLoginPage() {
             disabled={loading}
             className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {loading ? "Entrando..." : "Entrar"}
+            {loading
+              ? "Entrando..."
+              : "Entrar"}
           </button>
         </form>
       </div>
