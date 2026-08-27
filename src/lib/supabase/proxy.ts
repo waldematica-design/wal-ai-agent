@@ -44,13 +44,24 @@ export async function updateSession(request: NextRequest) {
   if (isAdminRoute && !isLoginRoute && !user) {
     const url = request.nextUrl.clone();
     url.pathname = "/admin/login";
+    url.searchParams.set("next", pathname);
 
     return NextResponse.redirect(url);
   }
 
   if (isLoginRoute && user) {
+    const nextPath = request.nextUrl.searchParams.get("next");
+
+    const safeNextPath =
+      nextPath &&
+      nextPath.startsWith("/admin/") &&
+      nextPath !== "/admin/login"
+        ? nextPath
+        : "/admin/leads";
+
     const url = request.nextUrl.clone();
-    url.pathname = "/admin/leads";
+    url.pathname = safeNextPath;
+    url.search = "";
 
     return NextResponse.redirect(url);
   }

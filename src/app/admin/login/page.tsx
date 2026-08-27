@@ -1,11 +1,15 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import {
+  useRouter,
+  useSearchParams,
+} from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 
 export default function AdminLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
 
   const [email, setEmail] = useState("");
@@ -32,7 +36,16 @@ export default function AdminLoginPage() {
       return;
     }
 
-    router.push("/admin/leads");
+    const nextPath = searchParams.get("next");
+
+    const safeNextPath =
+      nextPath &&
+      nextPath.startsWith("/admin/") &&
+      nextPath !== "/admin/login"
+        ? nextPath
+        : "/admin/leads";
+
+    router.push(safeNextPath);
     router.refresh();
   }
 
@@ -49,7 +62,7 @@ export default function AdminLoginPage() {
           </h1>
 
           <p className="mt-2 text-sm text-slate-400">
-            Acesso restrito ao painel do Agente de IA.
+            Acesso restrito aos painéis dos Agentes de IA.
           </p>
         </div>
 
