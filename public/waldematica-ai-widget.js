@@ -40,37 +40,6 @@
   const ROOT_ID =
     "waldematica-ai-widget-root";
 
-  function getPageContext() {
-    const pathname =
-      window.location.pathname || "/";
-
-    const normalizedPath =
-      pathname.length > 1
-        ? pathname.replace(/\/+$/, "")
-        : "/";
-
-    const pageLabels = {
-      "/": "Home do Waldemática",
-      "/extensivo": "Curso Extensivo",
-      "/curso-semiextensivo": "Curso Semiextensivo",
-      "/curso-profmat": "Curso PROFMAT / ENA",
-      "/revisao-1a-fase": "Revisão 1ª Fase",
-      "/revisao-2a-fase": "Revisão 2ª Fase",
-      "/padawan": "Planos Padawan 1 e Padawan 3",
-      "/cursos-gratis": "Cursos Grátis",
-      "/blog": "Blog Waldemática",
-    };
-
-    return {
-      pathname,
-      url: window.location.href,
-      title: document.title || "",
-      pageLabel:
-        pageLabels[normalizedPath] ||
-        "Página do site Waldemática",
-    };
-  }
-
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) {
       return;
@@ -1285,8 +1254,6 @@
               visitorToken:
                 visitorToken ||
                 undefined,
-              pageContext:
-                getPageContext(),
             }),
           });
 

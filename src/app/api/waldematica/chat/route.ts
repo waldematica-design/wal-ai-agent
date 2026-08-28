@@ -117,17 +117,10 @@ type FinalAgentResult = {
   memory_updates: MemoryUpdate[];
 };
 
-type PageContext = {
-  pathname?: string;
-  url?: string;
-  title?: string;
-  pageLabel?: string;
-};
 
 type ChatRequestBody = {
   message?: string;
   visitorToken?: string;
-  pageContext?: PageContext;
 };
 
 const memorySchema = {
@@ -719,6 +712,10 @@ Não faça perguntas apenas para coletar dados.
 
 Use o contexto recente da conversa e a memória útil do visitante.
 
+Em saudações simples, agradecimentos, despedidas ou conversa casual, responda de forma natural e curta.
+Não mencione espontaneamente curso, página, interesse anterior ou assunto antigo só porque ele aparece no histórico.
+Só retome um assunto anterior quando o visitante fizer referência a ele, pedir continuidade ou quando isso for realmente necessário para responder.
+
 Quando conseguir ajudar diretamente, ajude.
 
 Não encaminhe cedo demais para atendimento humano.
@@ -727,24 +724,6 @@ Não termine toda resposta com "Se quiser, posso..." ou frases equivalentes.
 
 Não invente preços, duração de acesso, bônus, conteúdo, links, políticas, formas de pagamento, condições comerciais ou qualquer outro fato oficial.
 
-=========================
-CONTEXTO DA PÁGINA ATUAL
-=========================
-
-${pageContextText || "Nenhum contexto de página foi enviado."}
-
-Use o contexto da página apenas para entender onde o visitante está e resolver referências naturais como:
-- "esse curso";
-- "essa revisão";
-- "esse plano";
-- "essa página";
-- "o curso que estou vendo".
-
-O contexto da página NÃO substitui a base oficial.
-
-Se a resposta depender de preço, duração, conteúdo, bônus, Tutor IA, suporte, checkout, público-alvo, política comercial ou qualquer outro dado oficial, consulte os dados oficiais normalmente antes de responder.
-
-Não diga ao visitante que está rastreando a página. Use esse contexto de forma natural e silenciosa.
 
 =========================
 DADOS OFICIAIS
@@ -1331,6 +1310,10 @@ Converse em português brasileiro de forma natural, inteligente, didática, acol
 
 Use o contexto recente da conversa.
 
+Em saudações simples, agradecimentos, despedidas ou conversa casual, responda de forma natural e curta.
+Não mencione espontaneamente curso, interesse anterior ou assunto antigo só porque ele aparece no histórico.
+Só retome um assunto anterior quando o visitante fizer referência a ele, pedir continuidade ou quando isso for necessário para responder.
+
 Os dados abaixo foram recuperados da base oficial da Waldemática porque são necessários para responder à mensagem atual.
 
 Trate esses dados como fonte de verdade.
@@ -1353,11 +1336,6 @@ MEMÓRIA ÚTIL:
 
 ${persistentMemory || "Nenhuma memória persistente relevante."}
 
-CONTEXTO DA PÁGINA ATUAL:
-
-${pageContextText || "Nenhum contexto de página foi enviado."}
-
-Use esse contexto somente para entender a referência do visitante ao produto/página atual. Os fatos comerciais continuam vindo exclusivamente dos dados oficiais abaixo.
 
 DADOS OFICIAIS PARA ESTA RESPOSTA:
 
@@ -1639,7 +1617,6 @@ ${officialContext}
       requestedBusinessInfoKeys
     );
 
-    console.log("Página atual:", pageContext.pageLabel || pageContext.pathname || "não informada");
 
     console.log("Lead atualizado:", leadUpdate.should_update);
 
