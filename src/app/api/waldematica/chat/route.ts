@@ -117,9 +117,17 @@ type FinalAgentResult = {
   memory_updates: MemoryUpdate[];
 };
 
+type PageContext = {
+  pathname?: string;
+  url?: string;
+  title?: string;
+  pageLabel?: string;
+};
+
 type ChatRequestBody = {
   message?: string;
   visitorToken?: string;
+  pageContext?: PageContext;
 };
 
 const memorySchema = {
@@ -208,6 +216,22 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json()) as ChatRequestBody;
     const message = body.message?.trim();
+
+    const pageContext = {
+      pathname: body.pageContext?.pathname?.trim().slice(0, 300) || "",
+      url: body.pageContext?.url?.trim().slice(0, 800) || "",
+      title: body.pageContext?.title?.trim().slice(0, 300) || "",
+      pageLabel: body.pageContext?.pageLabel?.trim().slice(0, 200) || "",
+    };
+
+    const pageContextText = [
+      pageContext.pageLabel ? `Página atual: ${pageContext.pageLabel}` : "",
+      pageContext.pathname ? `Rota: ${pageContext.pathname}` : "",
+      pageContext.title ? `Título da página: ${pageContext.title}` : "",
+      pageContext.url ? `URL atual: ${pageContext.url}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     if (!message) {
       return jsonResponse(
@@ -491,6 +515,25 @@ Não encaminhe cedo demais para atendimento humano.
 Não termine toda resposta com "Se quiser, posso..." ou frases equivalentes.
 
 Não invente preços, duração de acesso, bônus, conteúdo, links, políticas, formas de pagamento, condições comerciais ou qualquer outro fato oficial.
+
+=========================
+CONTEXTO DA PÁGINA ATUAL
+=========================
+
+${pageContextText || "Nenhum contexto de página foi enviado."}
+
+Use o contexto da página apenas para entender onde o visitante está e resolver referências naturais como:
+- "esse curso";
+- "essa revisão";
+- "esse plano";
+- "essa página";
+- "o curso que estou vendo".
+
+O contexto da página NÃO substitui a base oficial.
+
+Se a resposta depender de preço, duração, conteúdo, bônus, Tutor IA, suporte, checkout, público-alvo, política comercial ou qualquer outro dado oficial, consulte os dados oficiais normalmente antes de responder.
+
+Não diga ao visitante que está rastreando a página. Use esse contexto de forma natural e silenciosa.
 
 =========================
 DADOS OFICIAIS
@@ -1082,6 +1125,12 @@ MEMÓRIA ÚTIL:
 
 ${persistentMemory || "Nenhuma memória persistente relevante."}
 
+CONTEXTO DA PÁGINA ATUAL:
+
+${pageContextText || "Nenhum contexto de página foi enviado."}
+
+Use esse contexto somente para entender a referência do visitante ao produto/página atual. Os fatos comerciais continuam vindo exclusivamente dos dados oficiais abaixo.
+
 DADOS OFICIAIS PARA ESTA RESPOSTA:
 
 ${officialContext}
@@ -1356,6 +1405,8 @@ ${officialContext}
       "Informações gerais solicitadas:",
       requestedBusinessInfoKeys
     );
+
+    console.log("Página atual:", pageContext.pageLabel || pageContext.pathname || "não informada");
 
     console.log("Lead atualizado:", leadUpdate.should_update);
 
