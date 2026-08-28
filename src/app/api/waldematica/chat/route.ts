@@ -27,7 +27,7 @@ function getCorsHeaders(request: NextRequest) {
   const origin = request.headers.get("origin");
 
   const headers: Record<string, string> = {
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Max-Age": "86400",
     "Vary": "Origin",
@@ -117,7 +117,6 @@ type FinalAgentResult = {
   memory_updates: MemoryUpdate[];
 };
 
-
 type ChatRequestBody = {
   message?: string;
   visitorToken?: string;
@@ -167,217 +166,6 @@ function cleanMemoryKey(value: string) {
     .replace(/^_+|_+$/g, "");
 }
 
-
-function getCurrentPageCourseSlugs(
-  pathname: string,
-  validCourseSlugs: Set<string>
-) {
-  const normalizedPath =
-    pathname.length > 1
-      ? pathname.replace(/\/+$/, "")
-      : pathname;
-
-  const candidatesByPath: Record<string, string[]> = {
-    "/extensivo": ["extensivo"],
-    "/curso-semiextensivo": [
-      "semiextensivo",
-      "curso-semiextensivo",
-    ],
-    "/curso-profmat": [
-      "profmat",
-      "curso-profmat",
-      "profmat-ena",
-    ],
-    "/revisao-1a-fase": [
-      "revisao-1-fase",
-      "revisao-1a-fase",
-    ],
-    "/revisao-2a-fase": [
-      "revisao-2-fase",
-      "revisao-2a-fase",
-    ],
-    "/padawan": [
-      "padawan-1",
-      "padawan-3",
-    ],
-  };
-
-  return (candidatesByPath[normalizedPath] || []).filter(
-    (slug) => validCourseSlugs.has(slug)
-  );
-}
-
-function messageLikelyNeedsCurrentCourseData(message: string) {
-  return /(esse|essa|este|esta|curso|revis[aã]o|plano|tutor|ia|intelig[eê]ncia artificial|pre[cç]o|valor|acesso|dura[cç][aã]o|b[oô]nus|material|pdf|suporte|inclui|inclus[oa]|tem|possui|checkout|comprar|pagamento|garantia)/i.test(
-    message
-  );
-}
-
-export async function GET(request: NextRequest) {
-  try {
-    const origin = request.headers.get("origin");
-
-    if (origin && !ALLOWED_ORIGINS.has(origin)) {
-      return jsonResponse(
-        request,
-        {
-          status: "forbidden_origin",
-          error: "Origem não autorizada.",
-        },
-        {
-          status: 403,
-        }
-      );
-    }
-
-    if (
-      !process.env.SUPABASE_URL ||
-      !process.env.SUPABASE_SECRET_KEY
-    ) {
-      return jsonResponse(
-        request,
-        {
-          status: "configuration_error",
-        },
-        {
-          status: 500,
-        }
-      );
-    }
-
-    const visitorToken =
-      request.nextUrl.searchParams.get("visitorToken")?.trim();
-
-    if (!visitorToken) {
-      return jsonResponse(
-        request,
-        {
-          status: "ok",
-          messages: [],
-        },
-        {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        }
-      );
-    }
-
-    const {
-      data: visitor,
-      error: visitorError,
-    } = await supabase
-      .from("waldematica_visitors")
-      .select("id")
-      .eq("visitor_token", visitorToken)
-      .maybeSingle();
-
-    if (visitorError) {
-      throw visitorError;
-    }
-
-    if (!visitor) {
-      return jsonResponse(
-        request,
-        {
-          status: "ok",
-          messages: [],
-        },
-        {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        }
-      );
-    }
-
-    const {
-      data: conversation,
-      error: conversationError,
-    } = await supabase
-      .from("waldematica_conversations")
-      .select("id")
-      .eq("visitor_id", visitor.id)
-      .eq("status", "active")
-      .order("last_message_at", {
-        ascending: false,
-      })
-      .limit(1)
-      .maybeSingle();
-
-    if (conversationError) {
-      throw conversationError;
-    }
-
-    if (!conversation) {
-      return jsonResponse(
-        request,
-        {
-          status: "ok",
-          messages: [],
-        },
-        {
-          headers: {
-            "Cache-Control": "no-store",
-          },
-        }
-      );
-    }
-
-    const {
-      data: messages,
-      error: messagesError,
-    } = await supabase
-      .from("waldematica_messages")
-      .select("role, content, created_at")
-      .eq("conversation_id", conversation.id)
-      .order("created_at", {
-        ascending: true,
-      })
-      .limit(100);
-
-    if (messagesError) {
-      throw messagesError;
-    }
-
-    return jsonResponse(
-      request,
-      {
-        status: "ok",
-        messages: (messages || []).map((item) => ({
-          role:
-            item.role === "assistant"
-              ? "assistant"
-              : "user",
-          content: item.content,
-          createdAt: item.created_at,
-        })),
-      },
-      {
-        headers: {
-          "Cache-Control": "no-store",
-        },
-      }
-    );
-  } catch (error) {
-    console.error(
-      "Erro ao carregar histórico Waldemática:",
-      error
-    );
-
-    return jsonResponse(
-      request,
-      {
-        status: "error",
-        error: "Não foi possível carregar o histórico.",
-      },
-      {
-        status: 500,
-      }
-    );
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
     const origin = request.headers.get("origin");
@@ -420,22 +208,6 @@ export async function POST(request: NextRequest) {
 
     const body = (await request.json()) as ChatRequestBody;
     const message = body.message?.trim();
-
-    const pageContext = {
-      pathname: body.pageContext?.pathname?.trim().slice(0, 300) || "",
-      url: body.pageContext?.url?.trim().slice(0, 800) || "",
-      title: body.pageContext?.title?.trim().slice(0, 300) || "",
-      pageLabel: body.pageContext?.pageLabel?.trim().slice(0, 200) || "",
-    };
-
-    const pageContextText = [
-      pageContext.pageLabel ? `Página atual: ${pageContext.pageLabel}` : "",
-      pageContext.pathname ? `Rota: ${pageContext.pathname}` : "",
-      pageContext.title ? `Título da página: ${pageContext.title}` : "",
-      pageContext.url ? `URL atual: ${pageContext.url}` : "",
-    ]
-      .filter(Boolean)
-      .join("\n");
 
     if (!message) {
       return jsonResponse(
@@ -712,10 +484,6 @@ Não faça perguntas apenas para coletar dados.
 
 Use o contexto recente da conversa e a memória útil do visitante.
 
-Em saudações simples, agradecimentos, despedidas ou conversa casual, responda de forma natural e curta.
-Não mencione espontaneamente curso, página, interesse anterior ou assunto antigo só porque ele aparece no histórico.
-Só retome um assunto anterior quando o visitante fizer referência a ele, pedir continuidade ou quando isso for realmente necessário para responder.
-
 Quando conseguir ajudar diretamente, ajude.
 
 Não encaminhe cedo demais para atendimento humano.
@@ -723,7 +491,6 @@ Não encaminhe cedo demais para atendimento humano.
 Não termine toda resposta com "Se quiser, posso..." ou frases equivalentes.
 
 Não invente preços, duração de acesso, bônus, conteúdo, links, políticas, formas de pagamento, condições comerciais ou qualquer outro fato oficial.
-
 
 =========================
 DADOS OFICIAIS
@@ -1087,25 +854,12 @@ stage = null.
       (courseIndexResult.data || []).map((course) => course.slug)
     );
 
-    const currentPageCourseSlugs =
-      getCurrentPageCourseSlugs(
-        pageContext.pathname,
-        validCourseSlugs
-      );
-
-    const shouldForceCurrentPageCourseData =
-      currentPageCourseSlugs.length > 0 &&
-      messageLikelyNeedsCurrentCourseData(message);
-
     const requestedCourseSlugs = [
-      ...new Set([
-        ...(firstResult.official_data.course_slugs || []).filter((slug) =>
+      ...new Set(
+        (firstResult.official_data.course_slugs || []).filter((slug) =>
           validCourseSlugs.has(slug)
-        ),
-        ...(shouldForceCurrentPageCourseData
-          ? currentPageCourseSlugs
-          : []),
-      ]),
+        )
+      ),
     ].slice(0, MAX_COURSES_PER_TURN);
 
     const validBusinessInfoKeys = new Set(
@@ -1120,13 +874,9 @@ stage = null.
       ),
     ].slice(0, MAX_BUSINESS_INFO_PER_TURN);
 
-    const needsCourseOfficialData =
-      (firstResult.official_data.needs_course_data ||
-        shouldForceCurrentPageCourseData) &&
-      requestedCourseSlugs.length > 0;
-
     const needsOfficialData =
-      needsCourseOfficialData ||
+      (firstResult.official_data.needs_course_data &&
+        requestedCourseSlugs.length > 0) ||
       requestedBusinessInfoKeys.length > 0;
 
     let finalReply = firstResult.reply.trim();
@@ -1145,7 +895,7 @@ stage = null.
        * DADOS DOS CURSOS
        */
       if (
-        needsCourseOfficialData &&
+        firstResult.official_data.needs_course_data &&
         requestedCourseSlugs.length > 0
       ) {
         const { data: courses, error: coursesError } = await supabase
@@ -1310,10 +1060,6 @@ Converse em português brasileiro de forma natural, inteligente, didática, acol
 
 Use o contexto recente da conversa.
 
-Em saudações simples, agradecimentos, despedidas ou conversa casual, responda de forma natural e curta.
-Não mencione espontaneamente curso, interesse anterior ou assunto antigo só porque ele aparece no histórico.
-Só retome um assunto anterior quando o visitante fizer referência a ele, pedir continuidade ou quando isso for necessário para responder.
-
 Os dados abaixo foram recuperados da base oficial da Waldemática porque são necessários para responder à mensagem atual.
 
 Trate esses dados como fonte de verdade.
@@ -1335,7 +1081,6 @@ Não tente prolongar artificialmente a conversa.
 MEMÓRIA ÚTIL:
 
 ${persistentMemory || "Nenhuma memória persistente relevante."}
-
 
 DADOS OFICIAIS PARA ESTA RESPOSTA:
 
@@ -1608,15 +1353,9 @@ ${officialContext}
     console.log("Cursos solicitados:", requestedCourseSlugs);
 
     console.log(
-      "Curso da página forçado:",
-      shouldForceCurrentPageCourseData
-    );
-
-    console.log(
       "Informações gerais solicitadas:",
       requestedBusinessInfoKeys
     );
-
 
     console.log("Lead atualizado:", leadUpdate.should_update);
 
