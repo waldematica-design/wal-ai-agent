@@ -978,6 +978,111 @@
 
     let isOpen = false;
     let isLoading = false;
+    let historyLoaded = false;
+    let historyLoading = false;
+
+    function clearMessages() {
+      messages.innerHTML = "";
+    }
+
+    async function loadHistory() {
+      if (historyLoaded || historyLoading) {
+        return;
+      }
+
+      historyLoading = true;
+
+      try {
+        const visitorToken =
+          window.localStorage.getItem(
+            VISITOR_TOKEN_KEY
+          );
+
+        if (!visitorToken) {
+          if (!messages.children.length) {
+            addMessage(
+              "assistant",
+              CONFIG.initialMessage
+            );
+          }
+
+          historyLoaded = true;
+          return;
+        }
+
+        const historyUrl =
+          new URL(CONFIG.apiUrl);
+
+        historyUrl.searchParams.set(
+          "visitorToken",
+          visitorToken
+        );
+
+        const response =
+          await fetch(historyUrl.toString(), {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+            cache: "no-store",
+          });
+
+        let data = null;
+
+        try {
+          data = await response.json();
+        } catch {
+          data = null;
+        }
+
+        if (
+          !response.ok ||
+          !Array.isArray(data?.messages)
+        ) {
+          throw new Error(
+            data?.error ||
+              `Erro HTTP ${response.status}`
+          );
+        }
+
+        clearMessages();
+
+        if (data.messages.length > 0) {
+          data.messages.forEach((item) => {
+            if (
+              item?.role === "user" ||
+              item?.role === "assistant"
+            ) {
+              addMessage(
+                item.role,
+                String(item.content || "")
+              );
+            }
+          });
+        } else {
+          addMessage(
+            "assistant",
+            CONFIG.initialMessage
+          );
+        }
+
+        historyLoaded = true;
+      } catch (error) {
+        console.error(
+          "[Waldemática IA] Erro ao carregar histórico:",
+          error
+        );
+
+        if (!messages.children.length) {
+          addMessage(
+            "assistant",
+            CONFIG.initialMessage
+          );
+        }
+      } finally {
+        historyLoading = false;
+      }
+    }
 
     function scrollToBottom() {
       window.requestAnimationFrame(() => {
@@ -1100,6 +1205,8 @@
       }
 
       if (isOpen) {
+        loadHistory();
+
         window.setTimeout(() => {
           textarea.focus();
           scrollToBottom();
@@ -1321,10 +1428,20 @@
       }
     );
 
-    addMessage(
-      "assistant",
-      CONFIG.initialMessage
-    );
+    const existingVisitorToken =
+      window.localStorage.getItem(
+        VISITOR_TOKEN_KEY
+      );
+
+    if (existingVisitorToken) {
+      loadHistory();
+    } else {
+      addMessage(
+        "assistant",
+        CONFIG.initialMessage
+      );
+      historyLoaded = true;
+    }
   }
 
   if (
