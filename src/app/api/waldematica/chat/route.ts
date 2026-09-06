@@ -467,10 +467,10 @@ export async function POST(request: NextRequest) {
      */
 
     const firstResponse = await openai.responses.create({
-      model: "gpt-5.4-mini",
+      model: "gpt-5.6-terra",
 
       reasoning: {
-        effort: "medium",
+        effort: "low",
       },
 
       instructions: `
@@ -692,7 +692,7 @@ stage = null.
 
       input: conversationHistory,
 
-      max_output_tokens: 750,
+      max_output_tokens: 1600,
 
       text: {
         format: {
@@ -1055,10 +1055,10 @@ Trate essas informações como fonte de verdade e não invente condições ausen
        */
 
       const finalResponse = await openai.responses.create({
-        model: "gpt-5.4-mini",
+        model: "gpt-5.6-terra",
 
         reasoning: {
-          effort: "medium",
+          effort: "low",
         },
 
         instructions: `
@@ -1097,7 +1097,7 @@ ${officialContext}
 
         input: conversationHistory,
 
-        max_output_tokens: 650,
+        max_output_tokens: 1600,
 
         text: {
           format: {
