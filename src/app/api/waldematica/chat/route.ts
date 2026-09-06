@@ -469,6 +469,10 @@ export async function POST(request: NextRequest) {
     const firstResponse = await openai.responses.create({
       model: "gpt-5.4-mini",
 
+      reasoning: {
+        effort: "medium",
+      },
+
       instructions: `
 Você é o Agente de IA oficial da Waldemática e atende visitantes do site waldematica.com.br.
 
@@ -1052,6 +1056,10 @@ Trate essas informações como fonte de verdade e não invente condições ausen
 
       const finalResponse = await openai.responses.create({
         model: "gpt-5.4-mini",
+
+        reasoning: {
+          effort: "medium",
+        },
 
         instructions: `
 Você é o Agente de IA oficial da Waldemática.
