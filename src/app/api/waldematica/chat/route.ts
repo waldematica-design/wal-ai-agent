@@ -24,6 +24,124 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
 ]);
 
+
+const NEW_CONVERSATION_NOTIFICATION_ORIGINS = new Set([
+  "https://waldematica.com.br",
+  "https://www.waldematica.com.br",
+  "http://localhost:3000",
+]);
+
+function shouldNotifyNewConversation(origin: string | null) {
+  return Boolean(
+    origin &&
+      NEW_CONVERSATION_NOTIFICATION_ORIGINS.has(origin)
+  );
+}
+
+async function notifyNewConversation({
+  message,
+  conversationId,
+  visitorId,
+  origin,
+}: {
+  message: string;
+  conversationId: string;
+  visitorId: string;
+  origin: string | null;
+}) {
+  const resendApiKey =
+    process.env.RESEND_API_KEY?.trim();
+
+  const alertEmail =
+    process.env.WALDEMATICA_ALERT_EMAIL?.trim();
+
+  const fromEmail =
+    process.env.WALDEMATICA_ALERT_FROM_EMAIL?.trim();
+
+  if (
+    !resendApiKey ||
+    !alertEmail ||
+    !fromEmail
+  ) {
+    console.warn(
+      "Aviso de nova conversa não enviado: configure RESEND_API_KEY, WALDEMATICA_ALERT_EMAIL e WALDEMATICA_ALERT_FROM_EMAIL."
+    );
+
+    return;
+  }
+
+  const recipients = alertEmail
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (recipients.length === 0) {
+    console.warn(
+      "Aviso de nova conversa não enviado: WALDEMATICA_ALERT_EMAIL está vazio."
+    );
+
+    return;
+  }
+
+  const startedAt =
+    new Intl.DateTimeFormat(
+      "pt-BR",
+      {
+        dateStyle: "short",
+        timeStyle: "medium",
+        timeZone: "America/Sao_Paulo",
+      }
+    ).format(new Date());
+
+  const firstMessage =
+    message.length > 1200
+      ? `${message.slice(0, 1200)}…`
+      : message;
+
+  const notificationText = [
+    "Novo atendimento no site Waldemática.",
+    "",
+    `Horário: ${startedAt}`,
+    `Origem: ${origin || "não identificada"}`,
+    `Conversa: ${conversationId}`,
+    `Visitante: ${visitorId}`,
+    "",
+    "Primeira mensagem:",
+    firstMessage,
+    "",
+    "O visitante continua sendo atendido normalmente pelo Agente IA.",
+  ].join("\n");
+
+  const response = await fetch(
+    "https://api.resend.com/emails",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: recipients,
+        subject: "💬 Nova conversa no site Waldemática",
+        text: notificationText,
+      }),
+      cache: "no-store",
+    }
+  );
+
+  if (!response.ok) {
+    const detail =
+      await response.text();
+
+    console.error(
+      "Falha ao enviar aviso de nova conversa:",
+      response.status,
+      detail
+    );
+  }
+}
+
 function getCorsHeaders(request: NextRequest) {
   const origin = request.headers.get("origin");
 
@@ -302,6 +420,9 @@ export async function POST(request: NextRequest) {
       throw conversationLookupError;
     }
 
+    const isNewConversation =
+      !conversationData;
+
     let conversation = conversationData;
 
     if (!conversation) {
@@ -338,6 +459,39 @@ export async function POST(request: NextRequest) {
 
     if (userMessageError) {
       throw userMessageError;
+    }
+
+    /*
+     * =========================================================
+     * AVISO DE NOVA CONVERSA
+     * =========================================================
+     *
+     * Envia apenas quando uma nova conversa é criada a partir
+     * do site Waldemática (e localhost para teste).
+     *
+     * Uma falha no e-mail nunca interrompe o atendimento.
+     * =========================================================
+     */
+
+    if (
+      isNewConversation &&
+      shouldNotifyNewConversation(origin)
+    ) {
+      try {
+        await notifyNewConversation({
+          message,
+          conversationId:
+            conversation.id,
+          visitorId:
+            visitor.id,
+          origin,
+        });
+      } catch (notificationError) {
+        console.error(
+          "Erro inesperado ao enviar aviso de nova conversa:",
+          notificationError
+        );
+      }
     }
 
     /*
