@@ -4,7 +4,24 @@ import { createClient } from "@supabase/supabase-js";
 
 const HISTORY_LIMIT = 10;
 const MEMORY_LIMIT = 20;
-const MAX_COURSES_PER_TURN = 5;
+const MAX_COURSES_PER_TURN = 9;
+
+// Sete assinaturas com checkout Waldemática IA / Mercado Pago.
+// Os dois cursos de revisão abaixo são vendas avulsas pela Hotmart.
+const WALDEMATICA_IA_PLAN_SLUGS = new Set([
+  "extensivo",
+  "semiextensivo",
+  "enem",
+  "profmat-ena",
+  "profmat-completo",
+  "padawan-3",
+  "padawan-1",
+]);
+
+const HOTMART_REVIEW_SLUGS = new Set([
+  "revisao-1-fase",
+  "revisao-2-fase",
+]);
 const MAX_BUSINESS_INFO_PER_TURN = 8;
 
 const openai = new OpenAI({
@@ -263,8 +280,8 @@ const memorySchema = {
   },
 } as const;
 
-function formatCurrency(value: number | null) {
-  if (value === null) {
+function formatCurrency(value: number | string | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) {
     return null;
   }
 
@@ -651,6 +668,9 @@ Não termine toda resposta com "Se quiser, posso..." ou frases equivalentes.
 
 Não invente preços, duração de acesso, bônus, conteúdo, links, políticas, formas de pagamento, condições comerciais ou qualquer outro fato oficial.
 
+O portfólio comercial tem sete assinaturas Waldemática IA (pagamento pelo Mercado Pago) e duas revisões avulsas (compra e acesso pela Hotmart). Consulte o índice oficial para identificar quais produtos estão cadastrados. Não confunda essas modalidades.
+Quando citar valores parcelados das assinaturas Waldemática IA, indique que são SIMULAÇÕES sujeitas a confirmação no checkout do Mercado Pago. Jamais garanta parcela, taxa, juros ou total definitivo. Consulte sempre os dados oficiais do curso antes de responder sobre valores.
+
 =========================
 DADOS OFICIAIS
 =========================
@@ -664,7 +684,7 @@ official_data.needs_course_data = true
 e informe em official_data.course_slugs somente os slugs dos cursos necessários.
 
 Isso inclui perguntas ou comparações sobre:
-- preço;
+- preço e parcelamento (incluindo simulação, taxas e juros);
 - duração de acesso;
 - público-alvo;
 - indicação;
@@ -691,7 +711,7 @@ Sempre que o visitante pedir:
 
 você DEVE marcar official_data.needs_course_data = true antes de dar a recomendação final.
 
-Em official_data.course_slugs, inclua os cursos plausivelmente relevantes para aquela decisão, usando TODO o índice disponível, especialmente tempo de acesso, resumo e indicação de cada plano.
+Em official_data.course_slugs, inclua os cursos plausivelmente relevantes para aquela decisão, usando TODO o índice disponível, especialmente tempo de acesso, resumo e indicação de cada plano. O catálogo completo prevê nove produtos; quando todos estiverem presentes no índice, você pode solicitar os nove se a comparação exigir. Não descarte os dois produtos PROFMAT ou o Plano ENEM.
 
 Quando o visitante informa um prazo concreto, dê prioridade na seleção dos slugs aos planos cujo tempo de acesso e indicação sejam compatíveis com esse prazo. Por exemplo, uma mudança importante de 6 meses para 3 meses exige reconsiderar também qualquer plano de 3 meses disponível no índice.
 
@@ -1105,6 +1125,14 @@ stage = null.
 
               const cashPrice = formatCurrency(course.price_cash);
               const installmentValue = formatCurrency(course.installment_value);
+              const isIaSubscription = WALDEMATICA_IA_PLAN_SLUGS.has(course.slug);
+              const isHotmartReview = HOTMART_REVIEW_SLUGS.has(course.slug);
+
+              const paymentConditions = isIaSubscription
+                ? "Assinatura Waldemática IA: checkout da plataforma e pagamento processado pelo Mercado Pago. O parcelamento exibido é SOMENTE UMA SIMULAÇÃO com taxas repassadas ao comprador. Valores finais de parcelas, taxas, juros e total são definidos no checkout, não garantidos pelo agente."
+                : isHotmartReview
+                  ? "Curso avulso comprado e acessado pela Hotmart, fora da assinatura Waldemática IA. As opções e valores finais de parcelamento dependem do checkout da Hotmart; não se aplica a simulação do Mercado Pago."
+                  : "Consultar as condições do checkout oficial; não pressupor plataforma de pagamento nem parcelamento.";
 
               const paymentText =
                 course.installment_count &&
@@ -1137,7 +1165,8 @@ NÃO INCLUÍDO: ${course.not_included || "Nenhuma restrição adicional cadastra
 MAIS INDICADO PARA: ${course.best_for || "Não cadastrado."}
 MENOS INDICADO PARA: ${course.not_best_for || "Não cadastrado."}
 DIFERENCIAIS: ${course.differentiators || "Não cadastrados."}
-PREÇO ATUAL: ${paymentText}
+PREÇO DO CATÁLOGO: ${paymentText}
+CONDIÇÕES DO PAGAMENTO: ${paymentConditions}
 PÁGINA OFICIAL: ${course.sales_page_url || "Não cadastrada."}
 CHECKOUT: ${course.checkout_url || "Não cadastrado."}
               `.trim();
@@ -1155,6 +1184,7 @@ Quando comparar cursos, explique as diferenças de forma natural e recomende com
 Não recomende automaticamente o produto mais caro.
 
 Se algum campo estiver "Não cadastrado", não invente a informação.
+Ao informar parcelas de assinaturas Waldemática IA, escreva na resposta que o valor é uma simulação e que o Mercado Pago confirma as condições finais. Nos cursos avulsos, não atribua o parcelamento à simulação do Mercado Pago.
           `.trim());
         }
       }
@@ -1228,6 +1258,8 @@ Os dados abaixo foram recuperados da base oficial da Waldemática porque são ne
 Trate esses dados como fonte de verdade.
 
 Não invente fatos comerciais ausentes.
+
+Quando mencionar parcelas de uma assinatura Waldemática IA, identifique-as explicitamente como simulação; taxas, juros, número de parcelas e total definitivos dependem do checkout do Mercado Pago. Para revisões avulsas, as condições finais são as da Hotmart. Não confunda compra de curso avulso com acesso à assinatura Waldemática IA.
 
 Quando houver mais de um curso, compare apenas os pontos relevantes à dúvida do visitante.
 
