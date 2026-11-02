@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { AdminMessageContent } from "./message-content";
 import { notFound } from "next/navigation";
 import {
   createWaldematicaAdminDataClient,
@@ -87,7 +88,7 @@ export default async function ConversaDetailPage({
               return (
                 <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[94%] rounded-2xl px-4 py-3 sm:max-w-[80%] ${isUser ? "rounded-br-sm bg-cyan-800/80 text-white" : "rounded-bl-sm border border-white/10 bg-slate-800 text-slate-100"}`}>
-                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p>
+                    {isUser ? <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">{message.content}</p> : <AdminMessageContent content={message.content} />}
                     <p className={`mt-3 text-[11px] ${isUser ? "text-cyan-100/75" : "text-slate-400"}`}>
                       {isUser ? "Visitante" : "Agente IA"} · {localDate(message.created_at)}
                     </p>

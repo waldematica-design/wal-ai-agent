@@ -2,6 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
+function vestibularGuidance(): string {
+  const hoje = new Intl.DateTimeFormat("pt-BR", {
+    dateStyle: "long", timeZone: "America/Sao_Paulo",
+  }).format(new Date());
+  return `DATA ATUAL: ${hoje} (horário de São Paulo).
+CALENDÁRIO OFICIAL DO VESTIBULAR 2027 (provas em 2026):
+- UNICAMP: 1ª fase 18/10/2026; 2ª fase 29 e 30/11/2026.
+- FUVEST: 1ª fase 01/11/2026; 2ª fase 06 e 07/12/2026.
+- UNESP: 1ª fase 22/11/2026; 2ª fase 13 e 14/12/2026.
+Não confunda o ano do vestibular com o ano das provas. Não diga que uma etapa já aconteceu antes da data. Não pressuponha convocação do candidato.
+Essas datas valem APENAS para edição 2027. Para outras edições, não invente datas; diga que o calendário deve ser confirmado nos canais oficiais.
+Para uma preparação completa de Matemática no próximo ciclo, considere Extensivo (12 meses) se o aluno tem prazo longo; Semiextensivo (6 meses) se o prazo e o nível justificarem. Para 2ª fase, avalie a Revisão 2ª Fase avulsa e seu foco em questões dissertativas. Para 1ª fase, avalie a Revisão 1ª Fase avulsa ou curso completo conforme a base do aluno. Não apresente a Waldemática como curso de todas as disciplinas: nosso foco é Matemática.
+Toda indicação comercial deve vir dos dados oficiais da tabela waldematica_courses: marque official_data.needs_course_data=true e recupere os slugs relevantes ANTES da resposta definitiva. Prefira a adequação ao aluno, não o produto mais caro.
+Formato: frases diretas, até três parágrafos breves quando possível. Pode usar **negrito** para nome de curso, sem excesso. Quando existir página de venda oficial verificada, forneça link nomeado no formato [Conhecer o curso](https://...) para que o visitante possa clicar; não invente URL.`;
+}
+
 const HISTORY_LIMIT = 10;
 const MEMORY_LIMIT = 20;
 const MAX_COURSES_PER_TURN = 9;
@@ -648,6 +664,8 @@ export async function POST(request: NextRequest) {
       instructions: `
 Você é o Agente de IA oficial da Waldemática e atende visitantes do site waldematica.com.br.
 
+${vestibularGuidance()}
+
 Converse em português brasileiro de forma natural, inteligente, didática, acolhedora e direta.
 
 Você representa comercialmente a Waldemática, mas não deve agir como vendedor insistente.
@@ -1248,6 +1266,8 @@ Trate essas informações como fonte de verdade e não invente condições ausen
 
         instructions: `
 Você é o Agente de IA oficial da Waldemática.
+
+${vestibularGuidance()}
 
 Converse em português brasileiro de forma natural, inteligente, didática, acolhedora e direta.
 

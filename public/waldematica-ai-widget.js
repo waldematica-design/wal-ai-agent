@@ -355,6 +355,20 @@
         text-underline-offset: 2px;
       }
 
+      .wm-ai-bubble a.wm-ai-course-link {
+        display: inline-block;
+        max-width: 100%;
+        margin: 5px 0 2px;
+        padding: 8px 12px;
+        border-radius: 11px;
+        border: 1px solid #9cc9e4;
+        background: #e3f4ff;
+        color: #064e85;
+        font-weight: 750;
+        text-decoration: none;
+      }
+      .wm-ai-bubble a.wm-ai-course-link:hover { background: #d1eaff; }
+
       .wm-ai-thinking {
         display: inline-flex;
         align-items: center;
@@ -570,29 +584,21 @@
   }
 
   function formatInlineMarkdown(value) {
+    const namedLinks = [];
     let text = escapeHtml(value);
-
-    text = text.replace(
-      /\*\*(.+?)\*\*/g,
-      "<strong>$1</strong>"
-    );
-
-    text = text.replace(
-      /(^|[\s(])((?:https?:\/\/)[^\s<]+)/g,
-      (match, prefix, rawUrl) => {
-        const cleanUrl = rawUrl.replace(
-          /[),.;!?]+$/g,
-          ""
-        );
-
-        const suffix =
-          rawUrl.slice(cleanUrl.length);
-
-        return `${prefix}<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer">${cleanUrl}</a>${suffix}`;
-      }
-    );
-
-    return text;
+    // Reservar links nomeados para não converter a URL duas vezes.
+    text = text.replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, (_match, label, url) => {
+      const id = namedLinks.push(
+        '<a class="wm-ai-course-link" href="' + url + '" target="_blank" rel="noopener noreferrer">' + label + '</a>'
+      ) - 1;
+      return '\uE000' + id + '\uE001';
+    });
+    text = text.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/(^|[\s(])((?:https?:\/\/)[^\s<]+)/g, (_match, prefix, rawUrl) => {
+      const clean = rawUrl.replace(/[),.;!?]+$/g, '');
+      return prefix + '<a href="' + clean + '" target="_blank" rel="noopener noreferrer">' + clean + '</a>' + rawUrl.slice(clean.length);
+    });
+    return text.replace(/\uE000(\d+)\uE001/g, (_match, id) => namedLinks[Number(id)] || '');
   }
 
   function renderMarkdown(value) {
